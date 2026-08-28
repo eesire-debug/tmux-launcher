@@ -27,12 +27,24 @@ CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "tmux-launcher")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sessions.json")
 DEFAULT_HOST = "103.95.70.250"
 AUTO_RESCAN_MS = 30000
+LOAD_REFRESH_MS = 10_000   # 负荷刷新周期
 
 CSS = b"""
 .dot-ok     { color: #2ecc71; }
 .dot-empty  { color: #95a5a6; }
 .dot-down   { color: #e74c3c; }
 .dot-notmux { color: #f39c12; }
+.load-card  { padding: 6px 8px; border: 1px solid #e0e0e0; border-radius: 8px;
+              background: #fbfbfb; }
+.load-card-down { padding: 6px 8px; border: 1px solid #e0e0e0; border-radius: 8px;
+              background: #f6f6f6; opacity: 0.75; }
+.load-name  { font-weight: bold; }
+.load-mut   { color: #7f8c8d; }
+.bar-track  { background: #ecf0f1; border-radius: 4px; min-height: 8px; }
+.bar-ok     { background: #2ecc71; border-radius: 4px; min-height: 8px; }
+.bar-warn   { background: #f39c12; border-radius: 4px; min-height: 8px; }
+.bar-high   { background: #e67e22; border-radius: 4px; min-height: 8px; }
+.bar-crit   { background: #e74c3c; border-radius: 4px; min-height: 8px; }
 """
 
 # ---------------- 配置 ----------------
@@ -83,27 +95,49 @@ def save_config(cfg):
     ensure_askpass()
 
 
+ASKPASS_VERSION = "v2"
+
+
 def ensure_askpass():
-    """生成 SSH_ASKPASS 辅助脚本：按 TL_TARGET 从配置里取密码，密码不进命令行/环境。"""
+    """生成 SSH_ASKPASS 辅助脚本：从 ssh 密码提示文本提取 user@host，
+    按 TL_TARGETS(多目标空格分隔，支持 -J 跳板) 匹配配置里的密码。
+    密码不进命令行/环境；文件带版本标记，升级时自动重写。"""
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    if os.path.exists(ASKPASS):
-        return ASKPASS
     content = '''#!/usr/bin/env python3
-import json, os, sys
+# %s
+import json, os, re, sys
 cfg_path = os.environ.get("TL_CONFIG", os.path.expanduser("~/.config/tmux-launcher/sessions.json"))
 try:
     with open(cfg_path, encoding="utf-8") as f:
         cfg = json.load(f)
 except Exception:
     sys.exit(1)
-target = os.environ.get("TL_TARGET", "")
-for s in cfg.get("servers", []):
-    t = ("%s@%s" % (s["user"], s["host"])) if s.get("user") else s["host"]
-    if t == target and s.get("password"):
-        sys.stdout.write(s["password"])
+prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+targets = os.environ.get("TL_TARGETS", "").split()
+m = re.search(r"([\\w.-]+@)?([\\w.-]+)(?::\\d+)?", prompt)
+if m:
+    targets.append((m.group(1) or "") + m.group(2))
+    if m.group(2):
+        targets.append(m.group(2))
+def match(t):
+    for s in cfg.get("servers", []):
+        full = ("%%s@%%s" %% (s["user"], s["host"])) if s.get("user") else s["host"]
+        if t in (full, s["host"]) and s.get("password"):
+            return s["password"]
+    return None
+for t in targets:
+    if not t:
+        continue
+    pw = match(t)
+    if pw:
+        sys.stdout.write(pw)
         sys.exit(0)
 sys.exit(1)
-'''
+''' % ASKPASS_VERSION
+    if os.path.exists(ASKPASS):
+        with open(ASKPASS, encoding="utf-8") as f:
+            if ASKPASS_VERSION in f.read(200):
+                return ASKPASS
     with open(ASKPASS, "w", encoding="utf-8") as f:
         f.write(content)
     os.chmod(ASKPASS, 0o700)
@@ -120,6 +154,36 @@ def port_of(srv):
         return int(srv.get("port") or 22)
     except (TypeError, ValueError):
         return 22
+
+
+def _jump_srv(srv, cfg):
+    """返回该服务器配置的网关服务器 dict（不存在/空返回 None）。"""
+    name = srv.get("jump") or ""
+    if not name or name == srv.get("name"):
+        return None
+    for s in cfg.get("servers", []):
+        if s["name"] == name:
+            return s
+    return None
+
+
+def _jump_args(srv, cfg):
+    """ssh -J 参数（一层嵌套穿梭）：[\"-J\", \"user@host\"]，无网关返回 []。"""
+    j = _jump_srv(srv, cfg)
+    if not j:
+        return []
+    port = port_of(j)
+    target = target_of(j)
+    return ["-J", ("%s:%d" % (target, port)) if port != 22 else target]
+
+
+def jump_display(srv, cfg):
+    """界面用的网关描述串，无网关返回空串。"""
+    j = _jump_srv(srv, cfg)
+    if not j:
+        return ""
+    return "via %s" % j["name"]
+
 
 
 # ---------------- 命令构建 ----------------
@@ -145,50 +209,63 @@ def _ssh_opts(srv):
     return " ".join(opts)
 
 
-def _env_prefix(srv):
-    """有密码时的环境变量前缀（放命令前）；无密码返回空串走密钥。"""
-    if not srv.get("password"):
+def _env_prefix(srv, cfg=None):
+    """有密码时的环境变量前缀（放命令前）；无密码返回空串走密钥。
+    带网关时 TL_TARGETS 含两跳主机，askpass 按 ssh 提示里的 host 匹配。"""
+    if not srv.get("password") and not (cfg and _jump_srv(srv, cfg)):
         return ""
-    return ("TL_TARGET=%s TL_CONFIG=%s SSH_ASKPASS=%s SSH_ASKPASS_REQUIRE=force "
-            % (shlex.quote(target_of(srv)), shlex.quote(CONFIG_FILE), shlex.quote(ASKPASS)))
+    targets = target_of(srv)
+    j = _jump_srv(srv, cfg) if cfg else None
+    if j:
+        targets = "%s %s" % (target_of(j), targets)
+    return ("TL_TARGETS=%s TL_CONFIG=%s SSH_ASKPASS=%s SSH_ASKPASS_REQUIRE=force "
+            % (shlex.quote(targets), shlex.quote(CONFIG_FILE), shlex.quote(ASKPASS)))
 
 
-def attach_shell_string(srv, session, startup=""):
+def attach_shell_string(srv, session, startup="", cfg=None):
     """本地终端整段执行的 shell：ssh → tmux (attach 或新建)，断线后窗口保留。"""
     remote = remote_cmd(session, startup)
-    cmd = ("%sssh -t -p %d %s %s %s"
-           % (_env_prefix(srv), port_of(srv), _ssh_opts(srv),
-              shlex.quote(target_of(srv)), shlex.quote(remote)))
+    cmd = ("%sssh -t %s -p %d %s %s %s"
+           % (_env_prefix(srv, cfg), " ".join(_jump_args(srv, cfg)), port_of(srv),
+              _ssh_opts(srv), shlex.quote(target_of(srv)), shlex.quote(remote)))
     return cmd + '; echo; read -p "已断开，回车关闭窗口..."; exit'
 
 
-def ssh_login_shell_string(srv):
-    cmd = ("%sssh -t -p %d %s %s"
-           % (_env_prefix(srv), port_of(srv), _ssh_opts(srv), shlex.quote(target_of(srv))))
+def ssh_login_shell_string(srv, cfg=None):
+    cmd = ("%sssh -t %s -p %d %s %s"
+           % (_env_prefix(srv, cfg), " ".join(_jump_args(srv, cfg)), port_of(srv),
+              _ssh_opts(srv), shlex.quote(target_of(srv))))
     return cmd + '; echo; read -p "已断开，回车关闭窗口..."; exit'
 
 
-def copy_attach_cmd(srv, session):
+def copy_attach_cmd(srv, session, cfg=None):
     remote = remote_cmd(session, "")
-    return ("%sssh -t -p %d %s %s %s"
-            % (_env_prefix(srv), port_of(srv), _ssh_opts(srv),
-               shlex.quote(target_of(srv)), shlex.quote(remote)))
+    return ("%sssh -t %s -p %d %s %s %s"
+            % (_env_prefix(srv, cfg), " ".join(_jump_args(srv, cfg)), port_of(srv),
+               _ssh_opts(srv), shlex.quote(target_of(srv)), shlex.quote(remote)))
 
 
 def sftp_url(srv):
-    """文件管理器用的 sftp:// URL。"""
+    """文件管理器用的 sftp:// URL（不支持跳板，直连场景用）。"""
     user = srv.get("user") or os.environ.get("USER", "")
     u = "%s@" % urllib.parse.quote(user) if user else ""
     port = port_of(srv)
     return "sftp://%s%s:%d/" % (u, srv["host"], port) if port != 22 else "sftp://%s%s/" % (u, srv["host"])
 
 
-def sftp_shell_string(srv):
-    """ptyxis 标签页里运行的 sftp 终端命令（复用 askpass 自动密码）。"""
+def sftp_cli_args(srv, cfg=None):
+    """sftp 命令行主体（含 -J 跳板、端口、askpass 环境变量前缀）。"""
     opts = _ssh_opts(srv)
     if port_of(srv) != 22:
-        opts += " -oPort=%d" % port_of(srv)
-    return ("%ssftp %s %s" % (_env_prefix(srv), opts, shlex.quote(target_of(srv)))
+        opts += " -o Port=%d" % port_of(srv)
+    return ("%ssftp %s %s %s"
+            % (_env_prefix(srv, cfg), " ".join(_jump_args(srv, cfg)),
+               opts, shlex.quote(target_of(srv))))
+
+
+def sftp_shell_string(srv, cfg=None):
+    """ptyxis 标签页里运行的 sftp 终端命令（复用 askpass 自动密码，支持 -J 跳板）。"""
+    return (sftp_cli_args(srv, cfg)
             + '; echo; read -p "已断开，回车关闭窗口..."; exit')
 
 
@@ -214,21 +291,105 @@ def launch_terminal(shell_string, title, tab=True):
     return argv
 
 
-def run_ssh_quiet(srv, remote):
-    """非交互执行一条远端命令（探测/终止等）。有密码时用 askpass 免密，否则 BatchMode 走密钥。"""
-    argv = ["ssh", "-p", str(port_of(srv)),
-            "-o", "ConnectTimeout=6", "-o", "ServerAliveInterval=15",
-            "-o", "StrictHostKeyChecking=accept-new"]
+def run_ssh_quiet(srv, remote, cfg=None):
+    """非交互执行一条远端命令（探测/终止/负荷等）。有密码时用 askpass 免密，否则 BatchMode 走密钥。
+    cfg 提供时支持 -J 一层跳板。"""
+    argv = ["ssh"]
+    jump = _jump_args(srv, cfg)
+    if jump:
+        argv += jump
+    argv += ["-p", str(port_of(srv)),
+             "-o", "ConnectTimeout=6", "-o", "ServerAliveInterval=15",
+             "-o", "StrictHostKeyChecking=accept-new"]
     env = None
-    if srv.get("password"):
+    j = _jump_srv(srv, cfg) if cfg else None
+    if srv.get("password") or j:
         argv += ["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no",
                  "-o", "NumberOfPasswordPrompts=1"]
-        env = dict(os.environ, TL_TARGET=target_of(srv), TL_CONFIG=CONFIG_FILE,
+        targets = target_of(srv)
+        if j:
+            targets = "%s %s" % (target_of(j), targets)
+        env = dict(os.environ, TL_TARGETS=targets, TL_CONFIG=CONFIG_FILE,
                    SSH_ASKPASS=ASKPASS, SSH_ASKPASS_REQUIRE="force")
     else:
         argv += ["-o", "BatchMode=yes"]
     argv += [target_of(srv), remote]
     return subprocess.run(argv, capture_output=True, text=True, timeout=15, env=env)
+
+
+# ---------------- 负荷探测 ----------------
+
+# 一次性取 load/内存/磁盘/在线时长/核数，格式: L|1|5|15 M|USED|TOTAL|AVAIL D|USED|TOTAL U|MIN C|N
+_LOAD_CMD = ("awk '{printf \"L|%s|%s|%s\\n\",$1,$2,$3}' /proc/loadavg "
+             "2>/dev/null; free -m 2>/dev/null | awk '/^Mem:/{printf \"M|%d|%d|%d\\n\",$2,$3,$7}' "
+             "2>/dev/null; df -m / 2>/dev/null | awk 'NR==2{printf \"D|%d|%d\\n\",$3,$2}' "
+             "2>/dev/null; awk '{print \"U|\" int($1/60)}' /proc/uptime 2>/dev/null; "
+             "nproc 2>/dev/null | awk '{print \"C|\" $1}'; true")
+
+
+def parse_load_output(text):
+    """解析 _LOAD_CMD 输出 → dict(load1, load5, load15, mem_used, mem_total,
+    mem_avail, disk_used, disk_total, up_min, cores, load_pct, ok)。"""
+    out = {}
+    for line in text.splitlines():
+        p = line.strip().split("|")
+        if len(p) < 2 or p[0] not in ("L", "M", "D", "U", "C"):
+            continue
+        try:
+            if p[0] == "L":
+                out.update(load1=float(p[1]), load5=float(p[2]), load15=float(p[3]))
+            elif p[0] == "M":
+                out.update(mem_total=int(p[1]), mem_used=int(p[2]), mem_avail=int(p[3]))
+            elif p[0] == "D":
+                out.update(disk_used=int(p[1]), disk_total=int(p[2]))
+            elif p[0] == "U":
+                out.update(up_min=int(p[1]))
+            elif p[0] == "C":
+                out.update(cores=int(p[1]))
+        except (ValueError, IndexError):
+            continue
+    if out.get("load1") is not None and out.get("cores"):
+        out["load_pct"] = out["load1"] / out["cores"] * 100.0
+    out["ok"] = any(k in out for k in ("load1", "mem_total"))
+    return out
+
+
+def load_status(info):
+    """按 load/核 比给出 (颜色class, 文字)。"""
+    pct = info.get("load_pct")
+    if pct is None:
+        return "load-ok", "负荷正常"
+    if pct < 60:
+        return "load-ok", "负荷轻"
+    if pct < 100:
+        return "load-warn", "负荷中"
+    if pct < 200:
+        return "load-high", "负荷高"
+    return "load-crit", "负荷过载"
+
+
+def fmt_up(mins):
+    if mins is None:
+        return "?"
+    if mins < 60:
+        return "%d 分钟" % mins
+    if mins < 60 * 24:
+        return "%d 小时 %d 分" % (mins // 60, mins % 60)
+    return "%d 天 %d 小时" % (mins // 1440, (mins % 1440) // 60)
+
+
+def probe_load(srv, cfg=None):
+    """ssh 探测服务器负荷；返回 (ok, info_dict)。失败时 info 含 msg。"""
+    try:
+        r = run_ssh_quiet(srv, _LOAD_CMD, cfg)
+    except subprocess.TimeoutExpired:
+        return False, {"msg": "SSH 超时"}
+    if r.returncode != 0:
+        return False, {"msg": "SSH 失败"}
+    info = parse_load_output(r.stdout)
+    if not info.get("ok"):
+        return False, {"msg": "输出异常", "raw": r.stdout[:200]}
+    return True, info
 
 
 # ---------------- 探测 ----------------
@@ -257,13 +418,14 @@ def parse_tmux_ls(r):
     return "empty", [], "tmux 已装，但没有任何会话"
 
 
-def scan_server(srv, seq, done):
-    """后台探测服务器上的 tmux 实例: tmux ls。结果回调 GLib.idle_add(done, result)。"""
+def scan_server(srv, seq, done, cfg=None):
+    """后台探测服务器上的 tmux 实例: tmux ls。结果回调 GLib.idle_add(done, result)。
+    cfg 提供时支持 -J 跳板。"""
     def run():
         remote = ("tmux ls -F '#{session_name}|#{session_windows}|#{session_created}' "
                   "2>/dev/null; echo RC=$?")
         try:
-            r = run_ssh_quiet(srv, remote)
+            r = run_ssh_quiet(srv, remote, cfg)
         except Exception:
             GLib.idle_add(done, {"srv": srv["name"], "seq": seq,
                                  "status": "down", "sessions": [], "msg": "服务器不可达"})
@@ -315,6 +477,8 @@ class MainWindow(Gtk.Window):
         self.sess_rows = {}            # box -> session dict
         self.srv_widgets = {}          # srv name -> (dot, box)
         self.sess_widgets = {}         # srv name -> {sess name: (dot, box)}
+        self.load_cards = {}           # srv name -> card box
+        self.load_running = {}         # srv name -> 是否在探测
 
         provider = Gtk.CssProvider()
         provider.load_from_data(CSS)
@@ -390,7 +554,25 @@ class MainWindow(Gtk.Window):
         self.status.set_margin_bottom(4)
         self.status.set_margin_start(8)
 
+        # ---- 顶部: 服务器负荷看板（10s 轮询）----
+        load_label = Gtk.Label(label="📊 服务器负荷", xalign=0)
+        load_label.get_style_context().add_class("dim-label")
+        load_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        load_bar.pack_start(load_label, False, False, 0)
+        self.b_load_all = Gtk.Button(label="🔄 全部刷新")
+        self.b_load_all.connect("clicked", lambda *a: self.refresh_loads())
+        load_bar.pack_end(self.b_load_all, False, False, 0)
+        self.load_sw = Gtk.ScrolledWindow()
+        self.load_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        self.load_sw.set_size_request(-1, 118)
+        self.load_grid = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.load_grid.set_margin_start(6)
+        self.load_grid.set_margin_end(6)
+        self.load_sw.add(self.load_grid)
+        load_bar.pack_start(self.load_sw, True, True, 0)
+
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        vbox.pack_start(load_bar, False, False, 0)
         vbox.pack_start(paned, True, True, 0)
         vbox.pack_start(self.status, False, False, 0)
         self.add(vbox)
@@ -398,7 +580,9 @@ class MainWindow(Gtk.Window):
         self.build_menus()
         self.reload_servers()
         GLib.timeout_add(AUTO_RESCAN_MS, self._auto_rescan)
+        GLib.timeout_add(LOAD_REFRESH_MS, self._auto_load)
         GLib.idle_add(self._initial_select)
+        self.refresh_loads(first=True)
 
     # ---------- 左列: 服务器 ----------
 
@@ -411,6 +595,114 @@ class MainWindow(Gtk.Window):
         for srv in self.cfg["servers"]:
             self.srv_list.add(self._make_srv_row(srv))
         self.srv_list.show_all()
+        self._rebuild_load_cards()
+
+    # ---------- 负荷看板 ----------
+
+    def _rebuild_load_cards(self):
+        for child in self.load_grid.get_children():
+            self.load_grid.remove(child)
+        self.load_cards = {}
+        self.load_running = {}
+        for srv in self.cfg["servers"]:
+            self.load_grid.add(self._make_load_card(srv))
+        self.load_grid.show_all()
+
+    def _make_load_card(self, srv):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        card.get_style_context().add_class("load-card-down")
+        card.set_size_request(228, -1)
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        name_l = Gtk.Label(label="", xalign=0)
+        name_l.get_style_context().add_class("load-name")
+        name_l.set_tooltip_text("%s:%d" % (target_of(srv), port_of(srv)))
+        top.pack_start(name_l, True, True, 0)
+        via = jump_display(srv, self.cfg)
+        if via:
+            vl = Gtk.Label(label="↪", xalign=0)
+            vl.get_style_context().add_class("load-mut")
+            vl.set_tooltip_text("经网关: %s" % via)
+            top.pack_end(vl, False, False, 0)
+        val_l = Gtk.Label(label="—", xalign=1)
+        val_l.get_style_context().add_class("load-mut")
+        top.pack_end(val_l, False, False, 0)
+        bar = Gtk.ProgressBar()
+        bar.set_show_text(False)
+        bar.set_fraction(0.0)
+        info_l = Gtk.Label(label="📊 探测中…", xalign=0)
+        info_l.get_style_context().add_class("load-mut")
+        card.pack_start(top, False, False, 0)
+        card.pack_start(bar, False, False, 0)
+        card.pack_start(info_l, False, False, 0)
+        self.load_cards[srv["name"]] = (card, name_l, val_l, bar, info_l)
+        return card
+
+    def _auto_load(self):
+        if self.get_visible():
+            self.refresh_loads()
+        return True
+
+    def refresh_loads(self, first=False):
+        for srv in self.cfg["servers"]:
+            if self.load_running.get(srv["name"]):
+                continue   # 上一轮还没回来，跳过
+            self.load_running[srv["name"]] = True
+            self._start_load_probe(srv)
+
+    def _start_load_probe(self, srv):
+        name_l, val_l, bar, info_l = self.load_cards.get(srv["name"], (None,) * 5)[1:]
+        if name_l is not None:
+            val_l.set_text("…")
+            info_l.set_text("📊 探测中…")
+
+        def run():
+            try:
+                r = run_ssh_quiet(srv, _LOAD_CMD, self.cfg)
+                info = parse_load_output(r.stdout)
+                if not info.get("ok"):
+                    info = parse_load_output(r.stderr)
+            except Exception:
+                info = {"ok": False}
+            GLib.idle_add(self._fill_load_card, srv["name"], info)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _fill_load_card(self, name, info):
+        self.load_running[name] = False
+        w = self.load_cards.get(name)
+        srv = self.srv_by_name(name)
+        if not (w and srv):
+            return
+        card, name_l, val_l, bar, info_l = w
+        name_l.set_markup("<b>%s</b>" % GLib.markup_escape_text(srv["name"]))
+        for cls in ("load-card", "load-card-down"):
+            card.get_style_context().remove_class(cls)
+        if not info.get("ok"):
+            card.get_style_context().add_class("load-card-down")
+            bar.set_fraction(0.0)
+            for cls in ("bar-ok", "bar-warn", "bar-high", "bar-crit"):
+                bar.get_style_context().remove_class(cls)
+            val_l.set_text("⚠ 离线")
+            info_l.set_text("📊 不可达")
+            return
+        card.get_style_context().add_class("load-card")
+        cls, label = load_status(info)
+        pct = info.get("load_pct")
+        frac = min(1.0, (pct or 0) / 200.0)
+        bar.set_fraction(frac)
+        bar.get_style_context().remove_class("bar-ok")
+        bar.get_style_context().remove_class("bar-warn")
+        bar.get_style_context().remove_class("bar-high")
+        bar.get_style_context().remove_class("bar-crit")
+        bar.get_style_context().add_class("bar-" + cls.split("-")[1])
+        cores = info.get("cores")
+        val_l.set_text("%.1f" % (pct or 0) + (" (/%d核)" % cores if cores else ""))
+        mem = ("%d%% 内存" % (info["mem_used"] * 100.0 / info["mem_total"])) if info.get("mem_total") else ""
+        disk = ("%d%% 磁盘" % (info["disk_used"] * 100.0 / info["disk_total"])) if info.get("disk_total") else ""
+        parts = [label, "%s load" % info.get("load1", "?"), mem, disk, "运行 %s" % fmt_up(info.get("up_min"))]
+        info_l.set_text(" · ".join(p for p in parts if p))
+        card.set_tooltip_text("%s:%d\n%s" % (target_of(srv), port_of(srv),
+                                            info_l.get_text()))
 
     def _make_srv_row(self, srv):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin=7)
@@ -464,7 +756,7 @@ class MainWindow(Gtk.Window):
         self.scan_seq += 1
         seq = self.scan_seq
         self.right_hint.set_text("🔄 正在探测 %s 上的 tmux 实例..." % srv["name"])
-        scan_server(srv, seq, self.on_scan_result)
+        scan_server(srv, seq, self.on_scan_result, self.cfg)
 
     def on_rescan(self, *a):
         if self.sel_srv:
@@ -554,24 +846,24 @@ class MainWindow(Gtk.Window):
         srv = self.srv_by_name(self.sel_srv)
         if not srv:
             return
-        argv = launch_terminal(attach_shell_string(srv, sess["name"]), "tmux: %s" % sess["name"],
-                               tab=self._tab_mode())
+        argv = launch_terminal(attach_shell_string(srv, sess["name"], cfg=self.cfg),
+                               "tmux: %s" % sess["name"], tab=self._tab_mode())
         if argv is None:
-            self.status.set_text("⚠ 未找到终端模拟器，请手动执行: " + copy_attach_cmd(srv, sess["name"]))
+            self.status.set_text("⚠ 未找到终端模拟器，请手动执行: " + copy_attach_cmd(srv, sess["name"], self.cfg))
         else:
             self.status.set_text("🔌 正在打开终端连接 %s → tmux %s ..." % (srv["name"], sess["name"]))
 
     def on_connect_ssh(self, *a):
         srv = self.srv_by_name(self.sel_srv)
         if srv:
-            launch_terminal(ssh_login_shell_string(srv), "ssh: %s" % srv["name"],
+            launch_terminal(ssh_login_shell_string(srv, self.cfg), "ssh: %s" % srv["name"],
                             tab=self._tab_mode())
             self.status.set_text("🔌 正在打开 SSH 终端 %s ..." % srv["name"])
 
     def on_sftp_terminal(self, *a):
         srv = self.srv_by_name(self.sel_srv)
         if srv:
-            launch_terminal(sftp_shell_string(srv), "sftp: %s" % srv["name"],
+            launch_terminal(sftp_shell_string(srv, self.cfg), "sftp: %s" % srv["name"],
                             tab=self._tab_mode())
             self.status.set_text("📂 正在打开 SFTP 终端 %s ..." % srv["name"])
 
@@ -595,13 +887,13 @@ class MainWindow(Gtk.Window):
         sess = self._selected_sess()
         srv = self.srv_by_name(self.sel_srv)
         if sess and srv:
-            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(copy_attach_cmd(srv, sess["name"]), -1)
-            self.status.set_text("📋 已复制: " + copy_attach_cmd(srv, sess["name"]))
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(copy_attach_cmd(srv, sess["name"], self.cfg), -1)
+            self.status.set_text("📋 已复制: " + copy_attach_cmd(srv, sess["name"], self.cfg))
 
     def on_copy_ssh_cmd(self, *a):
         srv = self.srv_by_name(self.sel_srv)
         if srv:
-            cmd = ssh_login_shell_string(srv).split("; echo")[0]
+            cmd = ssh_login_shell_string(srv, self.cfg).split("; echo")[0]
             Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(cmd, -1)
             self.status.set_text("📋 已复制 ssh 登录命令")
 
@@ -620,7 +912,7 @@ class MainWindow(Gtk.Window):
         if resp != Gtk.ResponseType.YES:
             return
         try:
-            r = run_ssh_quiet(srv, "tmux kill-session -t %s" % shlex.quote(sess["name"]))
+            r = run_ssh_quiet(srv, "tmux kill-session -t %s" % shlex.quote(sess["name"]), self.cfg)
             if r.returncode == 0:
                 self.status.set_text("💀 已终止会话 %s" % sess["name"])
             else:
@@ -722,12 +1014,33 @@ class MainWindow(Gtk.Window):
         cb_show.connect("toggled", lambda b: e_pass.set_visibility(b.get_active()))
         grid.attach(cb_show, 2, 4, 1, 1)
 
+        # 网关(跳板): 一层 SSH 嵌套穿梭。列表来自当前其他服务器
+        lb5 = Gtk.Label(label="网关(可选, 跳板)", xalign=0)
+        grid.attach(lb5, 0, 5, 1, 1)
+        e_jump = Gtk.ComboBoxText()
+        e_jump.append("", "（无 · 直连）")
+        my_name = srv["name"] if srv else None
+        jump_options = []   # (combo下标, 服务器名)
+        for s in self.cfg["servers"]:
+            if s["name"] == my_name:
+                continue
+            jump_options.append((len(jump_options) + 1, s["name"]))
+            e_jump.append(s["name"], "↪ %s (%s)" % (s["name"], s["host"]))
+        cur = (srv or {}).get("jump", "")
+        for idx, sname in jump_options:
+            if sname == cur:
+                e_jump.set_active(idx)
+                break
+        grid.attach(e_jump, 1, 5, 1, 1)
+
         d.show_all()
         resp = d.run()
         name = e_name.get_text().strip()
         host = e_host.get_text().strip() or DEFAULT_HOST
         user = e_user.get_text().strip()
         password = e_pass.get_text()
+        jump = e_jump.get_active_text() or ""
+        jump = "" if jump == "（无 · 直连）" else jump.split(" (")[0]
         d.destroy()
         if resp != Gtk.ResponseType.OK or not name:
             return None
@@ -737,7 +1050,10 @@ class MainWindow(Gtk.Window):
             port = 22
         if password and not user:
             user = os.environ.get("USER", "")   # 密码认证必须知道用户名
-        return {"name": name, "host": host, "user": user, "port": port, "password": password}
+        if jump == name:
+            jump = ""   # 不能把自己当网关
+        return {"name": name, "host": host, "user": user, "port": port,
+                "password": password, "jump": jump}
 
     # ---------- 新建 tmux 会话 ----------
 
