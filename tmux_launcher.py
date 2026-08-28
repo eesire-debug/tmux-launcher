@@ -42,6 +42,13 @@ list row:selected box.srv-card { background: #eef5ff; border-color: #5b9bd5; }
 list row:selected box.srv-card-down { background: #eef5ff; border-color: #5b9bd5; opacity: 0.9; }
 .load-name  { font-weight: bold; }
 .load-mut   { color: #7f8c8d; }
+.sess-card  { padding: 8px 10px; border: 1px solid #e3e6e8; border-radius: 8px;
+              background: #fbfcfd; }
+flowbox { background: transparent; }
+flowboxchild { padding: 3px; }
+flowboxchild:selected box.sess-card { background: #eef5ff; border-color: #5b9bd5; }
+list.srvlist { padding: 0; }
+list.srvlist row { padding: 0; min-height: 0; }   /* full-width cards, no row padding */
 .bar-track  { background: #ecf0f1; border-radius: 4px; min-height: 8px; }
 .bar-ok     { background: #2ecc71; border-radius: 4px; min-height: 8px; }
 .bar-warn   { background: #f39c12; border-radius: 4px; min-height: 8px; }
@@ -159,9 +166,12 @@ def port_of(srv):
 
 
 def _jump_srv(srv, cfg):
-    """返回该服务器配置的网关服务器 dict（不存在/空返回 None）。"""
-    name = srv.get("jump") or ""
-    if not name or name == srv.get("name"):
+    """返回该服务器配置的网关服务器 dict（不存在/空返回 None）。
+    兼容旧版对话框误把显示前缀 '↪ ' 存进 jump 的脏数据。"""
+    name = (srv.get("jump") or "").strip()
+    if name.startswith("↪"):
+        name = name[1:].strip()
+    if not name or name == (srv.get("name") or "").strip():
         return None
     for s in cfg.get("servers", []):
         if s["name"] == name:
@@ -305,14 +315,18 @@ def run_ssh_quiet(srv, remote, cfg=None):
              "-o", "StrictHostKeyChecking=accept-new"]
     env = None
     j = _jump_srv(srv, cfg) if cfg else None
-    if srv.get("password") or j:
-        argv += ["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no",
-                 "-o", "NumberOfPasswordPrompts=1"]
+    # 最后一跳的认证策略由目标机自己决定：有密码走 askpass(禁 pubkey)，
+    # 无密码走密钥 BatchMode(绝不弹提示)。-o 选项不会泄漏到 -J 网关跳
+    # （OpenSSH 10.2 实测：隐式 proxy 只继承 -l/-v）。
+    if srv.get("password") or (j and j.get("password")):
         targets = target_of(srv)
         if j:
             targets = "%s %s" % (target_of(j), targets)
         env = dict(os.environ, TL_TARGETS=targets, TL_CONFIG=CONFIG_FILE,
                    SSH_ASKPASS=ASKPASS, SSH_ASKPASS_REQUIRE="force")
+    if srv.get("password"):
+        argv += ["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no",
+                 "-o", "NumberOfPasswordPrompts=1"]
     else:
         argv += ["-o", "BatchMode=yes"]
     argv += [target_of(srv), remote]
@@ -321,21 +335,40 @@ def run_ssh_quiet(srv, remote, cfg=None):
 
 # ---------------- 负荷探测 ----------------
 
-# 一次性取 load/内存/磁盘/在线时长/核数，格式: L|1|5|15 M|USED|TOTAL|AVAIL D|USED|TOTAL U|MIN C|N
-_LOAD_CMD = ("awk '{printf \"L|%s|%s|%s\\n\",$1,$2,$3}' /proc/loadavg "
-             "2>/dev/null; free -m 2>/dev/null | awk '/^Mem:/{printf \"M|%d|%d|%d\\n\",$2,$3,$7}' "
-             "2>/dev/null; df -m / 2>/dev/null | awk 'NR==2{printf \"D|%d|%d\\n\",$3,$2}' "
-             "2>/dev/null; awk '{print \"U|\" int($1/60)}' /proc/uptime 2>/dev/null; "
-             "nproc 2>/dev/null | awk '{print \"C|\" $1}'; true")
+# 一次性取 load/内存/磁盘/在线时长/核数/网络/显卡。
+# 输出格式（每行一个标签，行尾必须带 \n）:
+#   L|1|5|15  M|TOTAL|USED|AVAIL  D|USED|TOTAL  U|MIN  C|N
+#   N|RX_KBPS|TX_KBPS            （非 lo/veth/docker 接口 1 秒采样和）
+#   G|UTIL|MEMU_MIB|MEMT_MIB|NAME （NVIDIA，每卡一行）/ G|lspci|NAME;NAME…（无驱动时兜底）
+_LOAD_CMD = (
+    "awk '{printf \"L|%s|%s|%s\\n\",$1,$2,$3}' /proc/loadavg 2>/dev/null; "
+    "free -m 2>/dev/null | awk '/^Mem:/{printf \"M|%d|%d|%d\\n\",$2,$3,$7}'; "
+    "df -m / 2>/dev/null | awk 'NR==2{printf \"D|%d|%d\\n\",$3,$2}'; "
+    "awk '{print \"U|\" int($1/60)}' /proc/uptime 2>/dev/null; "
+    "nproc 2>/dev/null | awk '{print \"C|\" $1}'; "
+    "s1=$(awk 'NR>2{sub(/:/,\"\",$1); if($1!=\"lo\" && $1 !~ /^(veth|docker|br-|virbr)/){r+=$2;t+=$9}}END{print r+0, t+0}' /proc/net/dev 2>/dev/null); "
+    "sleep 1; "
+    "s2=$(awk 'NR>2{sub(/:/,\"\",$1); if($1!=\"lo\" && $1 !~ /^(veth|docker|br-|virbr)/){r+=$2;t+=$9}}END{print r+0, t+0}' /proc/net/dev 2>/dev/null); "
+    "awk -v a=\"$s1\" -v b=\"$s2\" 'BEGIN{split(a,x,\" \"); split(b,y,\" \"); if(y[1]+0>=x[1]+0 && y[2]+0>=x[2]+0) printf \"N|%d|%d\\n\",(y[1]-x[1])/1024,(y[2]-x[2])/1024}'; "
+    "if command -v nvidia-smi >/dev/null 2>&1; then "
+    "nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,name --format=csv,noheader,nounits 2>/dev/null | head -16 | "
+    "while IFS=',' read -r u mu mt n; do "
+    "u=$(printf '%s' \"$u\" | tr -d ' ,'); mu=$(printf '%s' \"$mu\" | tr -d ' ,'); mt=$(printf '%s' \"$mt\" | tr -d ' ,'); "
+    "n=$(printf '%s' \"$n\" | sed 's/^ *//'); "
+    "[ -n \"$u\" ] && printf 'G|%s|%s|%s|%s\\n' \"$u\" \"$mu\" \"$mt\" \"$n\"; done; "
+    "else "
+    "g=$(lspci 2>/dev/null | grep -iE 'vga|3d controller|display controller' | head -4 | sed -E 's/^[0-9a-fA-F]{2}:[0-9a-fA-F]{2}.[0-9] +//' | cut -d'[' -f1 | sed 's/ *$//' | tr '\\n' ';'); "
+    "[ -n \"$g\" ] && printf 'G|lspci|%s\\n' \"$g\"; fi; true")
 
 
 def parse_load_output(text):
-    """解析 _LOAD_CMD 输出 → dict(load1, load5, load15, mem_used, mem_total,
-    mem_avail, disk_used, disk_total, up_min, cores, load_pct, ok)。"""
+    """解析 _LOAD_CMD 输出 → dict(load1, load5, load15, mem_*, disk_*, up_min, cores,
+    net_rx_kbps, net_tx_kbps, gpus=[...], load_pct, ok)。"""
     out = {}
+    gpus = []
     for line in text.splitlines():
         p = line.strip().split("|")
-        if len(p) < 2 or p[0] not in ("L", "M", "D", "U", "C"):
+        if len(p) < 2 or p[0] not in ("L", "M", "D", "U", "C", "N", "G"):
             continue
         try:
             if p[0] == "L":
@@ -348,8 +381,23 @@ def parse_load_output(text):
                 out.update(up_min=int(p[1]))
             elif p[0] == "C":
                 out.update(cores=int(p[1]))
+            elif p[0] == "N":
+                out.update(net_rx_kbps=int(float(p[1])), net_tx_kbps=int(float(p[2])))
+            elif p[0] == "G":
+                g = {}
+                if p[1] == "lspci":
+                    g["lspci"] = True
+                    g["names"] = [x for x in p[2].split(";") if x]
+                else:
+                    g["util"] = int(float(p[1]))
+                    g["mem_used"] = int(float(p[2]))
+                    g["mem_total"] = int(float(p[3]))
+                    g["name"] = p[4].strip() if len(p) > 4 else ""
+                gpus.append(g)
         except (ValueError, IndexError):
             continue
+    if gpus:
+        out["gpus"] = gpus
     if out.get("load1") is not None and out.get("cores"):
         out["load_pct"] = out["load1"] / out["cores"] * 100.0
     out["ok"] = any(k in out for k in ("load1", "mem_total"))
@@ -380,17 +428,72 @@ def fmt_up(mins):
     return "%d 天 %d 小时" % (mins // 1440, (mins % 1440) // 60)
 
 
+def fmt_kbps(v):
+    """KB/s → 人话 (K/s, M/s, G/s)。"""
+    if v is None:
+        return "?"
+    v = float(v)
+    if v >= 1024 * 1024:
+        return "%.1fG/s" % (v / 1024.0 / 1024.0)
+    if v >= 1024:
+        return "%.1fM/s" % (v / 1024.0)
+    return "%dK/s" % int(v)
+
+
+def gpu_text(info):
+    """GPU 信息 → 一行文本（NVIDIA 每卡: 名称 利用率 显存; 无驱动时 lspci 名称）。"""
+    gs = info.get("gpus") or []
+    if not gs:
+        return "GPU —"
+    parts = []
+    for g in gs:
+        if g.get("lspci"):
+            parts.append("; ".join(g["names"]))
+        else:
+            nm = g.get("name") or "GPU"
+            util = ("%d%%" % g["util"]) if g.get("util") is not None else "?"
+            mem = ("%d/%dG" % (g.get("mem_used", 0) // 1024, g["mem_total"] // 1024)) if g.get("mem_total") else "?"
+            parts.append("%s %s %s" % (nm, util, mem))
+    return "GPU " + " · ".join(parts)
+
+
+def net_text(info):
+    if info.get("net_rx_kbps") is None:
+        return "NET —"
+    return "NET ↓%s ↑%s" % (fmt_kbps(info["net_rx_kbps"]), fmt_kbps(info.get("net_tx_kbps", 0)))
+
+
+def ping_markup(ms):
+    """⚡ 延迟：绿<500ms 橙<1500ms 红≥1500ms。"""
+    if ms is None:
+        return '<span size="small" fgcolor="#95a5a6">⚡ —</span>'
+    color = "#2ecc71" if ms < 500 else ("#e67e22" if ms < 1500 else "#e74c3c")
+    return '<span size="small" fgcolor="%s">⚡%dms</span>' % (color, ms)
+
+
 def probe_load(srv, cfg=None):
-    """ssh 探测服务器负荷；返回 (ok, info_dict)。失败时 info 含 msg。"""
+    """ssh 探测服务器负荷；返回 (ok, info_dict)。info 含 rtt_ms(ssh 往返, 连通性指标)。
+    失败时 info 含 msg。"""
+    # 1) ping: 一次轻量 ssh 往返，测整条链路(含跳板)延迟
+    rtt = None
+    try:
+        t0 = time.monotonic()
+        pr = run_ssh_quiet(srv, "true", cfg)
+        if pr.returncode == 0:
+            rtt = int((time.monotonic() - t0) * 1000)
+    except Exception:
+        rtt = None
+    # 2) 完整探测（含 1 秒网络采样窗口，整体约 1.x 秒）
     try:
         r = run_ssh_quiet(srv, _LOAD_CMD, cfg)
     except subprocess.TimeoutExpired:
-        return False, {"msg": "SSH 超时"}
+        return False, {"msg": "SSH 超时", "rtt_ms": rtt}
     if r.returncode != 0:
-        return False, {"msg": "SSH 失败"}
+        return False, {"msg": "SSH 失败", "rtt_ms": rtt}
     info = parse_load_output(r.stdout)
+    info["rtt_ms"] = rtt
     if not info.get("ok"):
-        return False, {"msg": "输出异常", "raw": r.stdout[:200]}
+        return False, {"msg": "输出异常", "raw": r.stdout[:200], "rtt_ms": rtt}
     return True, info
 
 
@@ -476,9 +579,8 @@ class MainWindow(Gtk.Window):
         self.sel_srv = None            # 选中的服务器名
         self.srv_status = {}           # srv name -> status
         self.srv_rows = {}             # box -> srv name
-        self.sess_rows = {}            # box -> session dict
-        self.srv_widgets = {}          # srv name -> (dot, card, val, bar, info)
-        self.sess_widgets = {}         # srv name -> {sess name: (dot, box)}
+        self.srv_widgets = {}          # srv name -> (dot, card, val, bar, info, gpu, net, ping, target)
+        self.sess_widgets = {}         # box -> session dict
         self.load_running = {}         # srv name -> 是否在探测
         self.load_skip = {}            # srv name -> 上轮失败，本轮跳过（防不可达服务器闪烁）
 
@@ -513,6 +615,7 @@ class MainWindow(Gtk.Window):
         self.b_load_all.connect("clicked", lambda *a: self.refresh_loads(force=True))
         left_bar.pack_end(self.b_load_all, False, False, 0)
         self.srv_list = Gtk.ListBox()
+        self.srv_list.get_style_context().add_class("srvlist")
         self.srv_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.srv_list.connect("row-selected", self.on_srv_selected)
         self.srv_list.connect("button-press-event", self.on_srv_button_press)
@@ -539,12 +642,15 @@ class MainWindow(Gtk.Window):
         right_bar.pack_end(self.b_new, False, False, 0)
         right_bar.pack_end(self.b_refresh, False, False, 0)
 
-        self.sess_list = Gtk.ListBox()
-        self.sess_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self.sess_list.connect("row-activated", self.on_sess_activate)
-        self.sess_list.connect("button-press-event", self.on_sess_button_press)
+        self.sess_flow = Gtk.FlowBox()
+        self.sess_flow.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.sess_flow.set_max_children_per_line(2)    # 双列
+        self.sess_flow.set_min_children_per_line(2)
+        self.sess_flow.set_homogeneous(True)
+        self.sess_flow.set_valign(Gtk.Align.START)
+        self.sess_flow.connect("child-activated", self.on_sess_activate)
         sess_sw = Gtk.ScrolledWindow()
-        sess_sw.add(self.sess_list)
+        sess_sw.add(self.sess_flow)
         self.right_hint = Gtk.Label(label="", xalign=0, wrap=True)
         self.right_hint.set_margin_top(4)
         self.right_hint.set_margin_bottom(4)
@@ -616,10 +722,7 @@ class MainWindow(Gtk.Window):
 
         def run():
             try:
-                r = run_ssh_quiet(srv, _LOAD_CMD, self.cfg)
-                info = parse_load_output(r.stdout)
-                if not info.get("ok"):
-                    info = parse_load_output(r.stderr)
+                ok, info = probe_load(srv, self.cfg)
             except Exception:
                 info = {"ok": False}
             GLib.idle_add(self._fill_load_card, srv["name"], info)
@@ -632,7 +735,7 @@ class MainWindow(Gtk.Window):
         srv = self.srv_by_name(name)
         if not (w and srv):
             return
-        dot, card, val_l, bar, info_l = w
+        dot, card, val_l, bar, info_l, gpu_l, net_l, ping_l, target_l = w
         for cls in ("srv-card", "srv-card-down"):
             card.get_style_context().remove_class(cls)
         if not info.get("ok"):
@@ -643,6 +746,9 @@ class MainWindow(Gtk.Window):
                 bar.get_style_context().remove_class(cls)
             val_l.set_text("⚠ 离线")
             info_l.set_markup('<span size="small">📊 不可达</span>')
+            gpu_l.set_text("")
+            net_l.set_text("")
+            ping_l.set_markup(ping_markup(info.get("rtt_ms")))
             return
         self.load_skip[name] = False
         card.get_style_context().add_class("srv-card")
@@ -660,15 +766,21 @@ class MainWindow(Gtk.Window):
                                                    + (" (/%d核)" % cores if cores else "")))
         mem = ("%d%% 内存" % (info["mem_used"] * 100.0 / info["mem_total"])) if info.get("mem_total") else ""
         disk = ("%d%% 磁盘" % (info["disk_used"] * 100.0 / info["disk_total"])) if info.get("disk_total") else ""
-        parts = [label, "%s load" % info.get("load1", "?"), mem, disk, "运行 %s" % fmt_up(info.get("up_min"))]
+        parts = [label, "load %s" % info.get("load1", "?"), mem, disk, "运行 %s" % fmt_up(info.get("up_min"))]
         text = " · ".join(p for p in parts if p)
         info_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(text))
-        card.set_tooltip_text("%s:%d\n%s" % (target_of(srv), port_of(srv), text))
+        gpu_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(gpu_text(info)))
+        net_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(net_text(info)))
+        ping_l.set_markup(ping_markup(info.get("rtt_ms")))
+        card.set_tooltip_text("%s:%d\n%s\n%s\n%s" % (target_of(srv), port_of(srv),
+                                                     text, gpu_text(info), net_text(info)))
 
     def _make_srv_row(self, srv):
-        """服务器卡片：状态点 + 名称 + 网关标记 + load% + 进度条 + 内存/磁盘 + 目标地址。
+        """服务器卡片（撑满栏宽）：状态点 + 名称 + 网关标记 + ping + load% + 进度条
+        + load/内存/磁盘/uptime + GPU + 网络 + 目标地址。
         点选卡片 → on_srv_selected → 右侧显示该服务器的 tmux 会话清单。"""
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        card.set_margin_bottom(6)    # 卡片间留白（水平方向无 margin → 撑满栏宽）
         card.get_style_context().add_class("srv-card-down")   # 首次探测成功后转正常态
 
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
@@ -680,15 +792,18 @@ class MainWindow(Gtk.Window):
         name_l.set_markup("<b>%s</b>" % GLib.markup_escape_text(srv["name"]))
         top.pack_start(dot, False, False, 0)
         top.pack_start(name_l, True, True, 0)
+        val_l = Gtk.Label(label="—", xalign=1)
+        val_l.get_style_context().add_class("load-mut")
+        top.pack_end(val_l, False, False, 0)
+        ping_l = Gtk.Label(label="", xalign=1)
+        ping_l.set_tooltip_text("ssh 往返延迟(含跳板链路)")
+        top.pack_end(ping_l, False, False, 0)
         via = jump_display(srv, self.cfg)
         if via:
             vl = Gtk.Label(label="↪", xalign=0)
             vl.get_style_context().add_class("load-mut")
             vl.set_tooltip_text("经网关: %s" % via)
             top.pack_end(vl, False, False, 0)
-        val_l = Gtk.Label(label="—", xalign=1)
-        val_l.get_style_context().add_class("load-mut")
-        top.pack_end(val_l, False, False, 0)
 
         bar = Gtk.ProgressBar()
         bar.set_show_text(False)
@@ -697,6 +812,10 @@ class MainWindow(Gtk.Window):
         info_l = Gtk.Label(label="", xalign=0)
         info_l.get_style_context().add_class("load-mut")
         info_l.set_markup('<span size="small">📊 探测中…</span>')
+        gpu_l = Gtk.Label(label="", xalign=0)
+        gpu_l.get_style_context().add_class("load-mut")
+        net_l = Gtk.Label(label="", xalign=0)
+        net_l.get_style_context().add_class("load-mut")
         target_l = Gtk.Label(label="", xalign=0)
         target_l.get_style_context().add_class("load-mut")
         target_l.set_markup('<span size="small" fgcolor="#95a5a6">%s</span>'
@@ -705,9 +824,11 @@ class MainWindow(Gtk.Window):
         card.pack_start(top, False, False, 0)
         card.pack_start(bar, False, False, 0)
         card.pack_start(info_l, False, False, 0)
+        card.pack_start(gpu_l, False, False, 0)
+        card.pack_start(net_l, False, False, 0)
         card.pack_start(target_l, False, False, 0)
         self.srv_rows[card] = srv["name"]
-        self.srv_widgets[srv["name"]] = (dot, card, val_l, bar, info_l)
+        self.srv_widgets[srv["name"]] = (dot, card, val_l, bar, info_l, gpu_l, net_l, ping_l, target_l)
         return card
 
     def srv_by_name(self, name):
@@ -772,22 +893,23 @@ class MainWindow(Gtk.Window):
         self._fill_sessions(srv_name, st, result["sessions"], result["msg"])
 
     def _fill_sessions(self, srv_name, st, sessions, msg):
-        for child in self.sess_list.get_children():
-            self.sess_list.remove(child)
+        for child in self.sess_flow.get_children():
+            self.sess_flow.remove(child)
         self.sess_widgets = {}
         if st == "ok":
             for sess in sessions:
-                self.sess_list.add(self._make_sess_row(sess))
-            self.sess_list.show_all()
+                self.sess_flow.add(self._make_sess_row(sess))
+            self.sess_flow.show_all()
             self.right_hint.set_text("双击会话即连接 · 右键更多操作 · 每 30 秒自动刷新")
             self.status.set_text("🔍 %s: 探测到 %d 个 tmux 会话" % (srv_name, len(sessions)))
         else:
-            self.sess_list.show_all()
+            self.sess_flow.show_all()
             self.right_hint.set_text("ℹ️ %s — %s。点「➕ 新建 tmux 会话」创建。" % (msg, srv_name))
             self.status.set_text("🔍 %s: %s" % (srv_name, msg))
 
     def _make_sess_row(self, sess):
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin=7)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.get_style_context().add_class("sess-card")
         dot = Gtk.Label(label="●")
         dot.get_style_context().add_class("dot-ok")
         dot.set_tooltip_text("运行中")
@@ -802,21 +924,25 @@ class MainWindow(Gtk.Window):
         v.pack_start(sl, False, False, 0)
         box.pack_start(dot, False, False, 0)
         box.pack_start(v, True, True, 0)
+        box.connect("button-press-event", self._on_sess_card_press)
         self.sess_widgets[box] = sess
         return box
 
-    def on_sess_activate(self, listbox, row):
-        """row-activated 信号签名是 (listbox, row)，row 才是被激活的行。"""
-        sess = self.sess_widgets.get(row.get_child())
+    def on_sess_activate(self, flowbox, child):
+        """child-activated: 双击或回车连接。child 是 FlowBoxChild，其子节点才是卡片 box。"""
+        sess = self.sess_widgets.get(child.get_child())
         if sess:
             self._connect(sess)
 
-    def on_sess_button_press(self, widget, event):
+    def _on_sess_card_press(self, box, event):
+        """卡片自身的右键 → 选中该卡并弹菜单。FlowBox 没有 get_child_at，
+        所以把事件绑在卡片上；box 的父节点就是包裹它的 FlowBoxChild。"""
         if event.button == 3:
-            row = self.sess_list.get_row_at_y(int(event.y))
-            if row is not None:
-                self.sess_list.select_row(row)
-                self.sess_menu.popup(None, None, None, None, event.button, event.time)
+            parent = box.get_parent()
+            if parent is not None:
+                self.sess_flow.select_child(parent)
+            self.sess_menu.popup(None, None, None, None, event.button, event.time)
+            return True
         return False
 
     # ---------- 动作 ----------
@@ -909,11 +1035,12 @@ class MainWindow(Gtk.Window):
         self._scan(srv)
 
     def _selected_sess(self):
-        row = self.sess_list.get_selected_row()
-        if row is None:
+        sel = self.sess_flow.get_selected_children()
+        child = sel[0] if sel else None
+        if child is None:
             self.status.set_text("⚠ 请先在右侧选中一个 tmux 会话")
             return None
-        return self.sess_widgets.get(row.get_child())
+        return self.sess_widgets.get(child.get_child())
 
     # ---------- 服务器增删改 ----------
 
@@ -1007,16 +1134,16 @@ class MainWindow(Gtk.Window):
         e_jump = Gtk.ComboBoxText()
         e_jump.append("", "（无 · 直连）")
         my_name = srv["name"] if srv else None
-        jump_options = []   # (combo下标, 服务器名)
+        jump_names = []   # combo 下标(≥1) → 服务器名；保存按下标取，绝不反解析显示文本
         for s in self.cfg["servers"]:
             if s["name"] == my_name:
                 continue
-            jump_options.append((len(jump_options) + 1, s["name"]))
+            jump_names.append(s["name"])
             e_jump.append(s["name"], "↪ %s (%s)" % (s["name"], s["host"]))
-        cur = (srv or {}).get("jump", "")
-        for idx, sname in jump_options:
+        cur = (srv or {}).get("jump", "").lstrip("↪").strip()
+        for i, sname in enumerate(jump_names, start=1):
             if sname == cur:
-                e_jump.set_active(idx)
+                e_jump.set_active(i)
                 break
         grid.attach(e_jump, 1, 5, 1, 1)
 
@@ -1026,8 +1153,8 @@ class MainWindow(Gtk.Window):
         host = e_host.get_text().strip() or DEFAULT_HOST
         user = e_user.get_text().strip()
         password = e_pass.get_text()
-        jump = e_jump.get_active_text() or ""
-        jump = "" if jump == "（无 · 直连）" else jump.split(" (")[0]
+        active = e_jump.get_active()
+        jump = jump_names[active - 1] if active > 0 else ""
         d.destroy()
         if resp != Gtk.ResponseType.OK or not name:
             return None
