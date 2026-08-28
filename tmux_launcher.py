@@ -34,10 +34,12 @@ CSS = b"""
 .dot-empty  { color: #95a5a6; }
 .dot-down   { color: #e74c3c; }
 .dot-notmux { color: #f39c12; }
-.load-card  { padding: 6px 8px; border: 1px solid #e0e0e0; border-radius: 8px;
-              background: #fbfbfb; }
-.load-card-down { padding: 6px 8px; border: 1px solid #e0e0e0; border-radius: 8px;
+.srv-card   { padding: 8px 10px; border: 1px solid #e3e6e8; border-radius: 8px;
+              background: #fbfcfd; }
+.srv-card-down { padding: 8px 10px; border: 1px solid #e3e6e8; border-radius: 8px;
               background: #f6f6f6; opacity: 0.75; }
+list row:selected box.srv-card { background: #eef5ff; border-color: #5b9bd5; }
+list row:selected box.srv-card-down { background: #eef5ff; border-color: #5b9bd5; opacity: 0.9; }
 .load-name  { font-weight: bold; }
 .load-mut   { color: #7f8c8d; }
 .bar-track  { background: #ecf0f1; border-radius: 4px; min-height: 8px; }
@@ -458,7 +460,7 @@ class MainWindow(Gtk.Window):
 
     def __init__(self):
         super().__init__(title="🔗 Tmux 连接器")
-        self.set_default_size(860, 520)
+        self.set_default_size(900, 560)
         # WM_CLASS 必须与 .desktop 的 StartupWMClass 一致，GNOME dock 才显示正确图标
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -475,10 +477,10 @@ class MainWindow(Gtk.Window):
         self.srv_status = {}           # srv name -> status
         self.srv_rows = {}             # box -> srv name
         self.sess_rows = {}            # box -> session dict
-        self.srv_widgets = {}          # srv name -> (dot, box)
+        self.srv_widgets = {}          # srv name -> (dot, card, val, bar, info)
         self.sess_widgets = {}         # srv name -> {sess name: (dot, box)}
-        self.load_cards = {}           # srv name -> card box
         self.load_running = {}         # srv name -> 是否在探测
+        self.load_skip = {}            # srv name -> 上轮失败，本轮跳过（防不可达服务器闪烁）
 
         provider = Gtk.CssProvider()
         provider.load_from_data(CSS)
@@ -500,9 +502,16 @@ class MainWindow(Gtk.Window):
         self.tab_btn.connect("toggled", self.on_tab_toggled)
         hb.pack_end(self.tab_btn)
 
-        # ---- 左: 服务器列表 ----
-        left_label = Gtk.Label(label="🖥 服务器", xalign=0)
+        # ---- 左: 服务器卡片（列表+负荷看板合并，点选即显示 tmux 清单）----
+        left_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        left_label = Gtk.Label(label="🖥 服务器 · 负荷", xalign=0)
         left_label.get_style_context().add_class("dim-label")
+        left_bar.pack_start(left_label, True, True, 0)
+        self.b_load_all = Gtk.Button(label="🔄")
+        self.b_load_all.set_relief(Gtk.ReliefStyle.NONE)
+        self.b_load_all.set_tooltip_text("手动刷新全部服务器负荷")
+        self.b_load_all.connect("clicked", lambda *a: self.refresh_loads(force=True))
+        left_bar.pack_end(self.b_load_all, False, False, 0)
         self.srv_list = Gtk.ListBox()
         self.srv_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.srv_list.connect("row-selected", self.on_srv_selected)
@@ -511,9 +520,9 @@ class MainWindow(Gtk.Window):
         srv_sw.add(self.srv_list)
 
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        left.pack_start(left_label, False, False, 0)
+        left.pack_start(left_bar, False, False, 0)
         left.pack_start(srv_sw, True, True, 0)
-        left.set_size_request(240, -1)
+        left.set_size_request(300, -1)
 
         # ---- 右: 探测到的会话 ----
         self.right_info = Gtk.Label(label="请在左侧选择服务器", xalign=0)
@@ -554,25 +563,7 @@ class MainWindow(Gtk.Window):
         self.status.set_margin_bottom(4)
         self.status.set_margin_start(8)
 
-        # ---- 顶部: 服务器负荷看板（10s 轮询）----
-        load_label = Gtk.Label(label="📊 服务器负荷", xalign=0)
-        load_label.get_style_context().add_class("dim-label")
-        load_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        load_bar.pack_start(load_label, False, False, 0)
-        self.b_load_all = Gtk.Button(label="🔄 全部刷新")
-        self.b_load_all.connect("clicked", lambda *a: self.refresh_loads())
-        load_bar.pack_end(self.b_load_all, False, False, 0)
-        self.load_sw = Gtk.ScrolledWindow()
-        self.load_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-        self.load_sw.set_size_request(-1, 118)
-        self.load_grid = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.load_grid.set_margin_start(6)
-        self.load_grid.set_margin_end(6)
-        self.load_sw.add(self.load_grid)
-        load_bar.pack_start(self.load_sw, True, True, 0)
-
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        vbox.pack_start(load_bar, False, False, 0)
         vbox.pack_start(paned, True, True, 0)
         vbox.pack_start(self.status, False, False, 0)
         self.add(vbox)
@@ -590,70 +581,38 @@ class MainWindow(Gtk.Window):
         self.srv_rows = {}
         self.srv_widgets = {}
         self.srv_status = {}
+        self.load_running = {}
+        self.load_skip = {}
         for child in self.srv_list.get_children():
             self.srv_list.remove(child)
         for srv in self.cfg["servers"]:
             self.srv_list.add(self._make_srv_row(srv))
         self.srv_list.show_all()
-        self._rebuild_load_cards()
 
-    # ---------- 负荷看板 ----------
-
-    def _rebuild_load_cards(self):
-        for child in self.load_grid.get_children():
-            self.load_grid.remove(child)
-        self.load_cards = {}
-        self.load_running = {}
-        for srv in self.cfg["servers"]:
-            self.load_grid.add(self._make_load_card(srv))
-        self.load_grid.show_all()
-
-    def _make_load_card(self, srv):
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
-        card.get_style_context().add_class("load-card-down")
-        card.set_size_request(228, -1)
-        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        name_l = Gtk.Label(label="", xalign=0)
-        name_l.get_style_context().add_class("load-name")
-        name_l.set_tooltip_text("%s:%d" % (target_of(srv), port_of(srv)))
-        top.pack_start(name_l, True, True, 0)
-        via = jump_display(srv, self.cfg)
-        if via:
-            vl = Gtk.Label(label="↪", xalign=0)
-            vl.get_style_context().add_class("load-mut")
-            vl.set_tooltip_text("经网关: %s" % via)
-            top.pack_end(vl, False, False, 0)
-        val_l = Gtk.Label(label="—", xalign=1)
-        val_l.get_style_context().add_class("load-mut")
-        top.pack_end(val_l, False, False, 0)
-        bar = Gtk.ProgressBar()
-        bar.set_show_text(False)
-        bar.set_fraction(0.0)
-        info_l = Gtk.Label(label="📊 探测中…", xalign=0)
-        info_l.get_style_context().add_class("load-mut")
-        card.pack_start(top, False, False, 0)
-        card.pack_start(bar, False, False, 0)
-        card.pack_start(info_l, False, False, 0)
-        self.load_cards[srv["name"]] = (card, name_l, val_l, bar, info_l)
-        return card
+    # ---------- 负荷刷新 ----------
 
     def _auto_load(self):
         if self.get_visible():
             self.refresh_loads()
         return True
 
-    def refresh_loads(self, first=False):
+    def refresh_loads(self, first=False, force=False):
         for srv in self.cfg["servers"]:
-            if self.load_running.get(srv["name"]):
+            name = srv["name"]
+            if self.load_running.get(name):
                 continue   # 上一轮还没回来，跳过
-            self.load_running[srv["name"]] = True
+            if self.load_skip.get(name) and not force:
+                self.load_skip[name] = False
+                continue   # 刚失败过，下一轮再试（不可达服务器约 20s 重试一次，避免卡片闪烁）
+            self.load_running[name] = True
             self._start_load_probe(srv)
 
     def _start_load_probe(self, srv):
-        name_l, val_l, bar, info_l = self.load_cards.get(srv["name"], (None,) * 5)[1:]
-        if name_l is not None:
+        w = self.srv_widgets.get(srv["name"])
+        if w:
+            val_l, bar, info_l = w[2], w[3], w[4]
             val_l.set_text("…")
-            info_l.set_text("📊 探测中…")
+            info_l.set_markup('<span size="small">📊 探测中…</span>')
 
         def run():
             try:
@@ -669,59 +628,87 @@ class MainWindow(Gtk.Window):
 
     def _fill_load_card(self, name, info):
         self.load_running[name] = False
-        w = self.load_cards.get(name)
+        w = self.srv_widgets.get(name)
         srv = self.srv_by_name(name)
         if not (w and srv):
             return
-        card, name_l, val_l, bar, info_l = w
-        name_l.set_markup("<b>%s</b>" % GLib.markup_escape_text(srv["name"]))
-        for cls in ("load-card", "load-card-down"):
+        dot, card, val_l, bar, info_l = w
+        for cls in ("srv-card", "srv-card-down"):
             card.get_style_context().remove_class(cls)
         if not info.get("ok"):
-            card.get_style_context().add_class("load-card-down")
+            self.load_skip[name] = True
+            card.get_style_context().add_class("srv-card-down")
             bar.set_fraction(0.0)
             for cls in ("bar-ok", "bar-warn", "bar-high", "bar-crit"):
                 bar.get_style_context().remove_class(cls)
             val_l.set_text("⚠ 离线")
-            info_l.set_text("📊 不可达")
+            info_l.set_markup('<span size="small">📊 不可达</span>')
             return
-        card.get_style_context().add_class("load-card")
+        self.load_skip[name] = False
+        card.get_style_context().add_class("srv-card")
         cls, label = load_status(info)
         pct = info.get("load_pct")
-        frac = min(1.0, (pct or 0) / 200.0)
-        bar.set_fraction(frac)
+        bar.set_fraction(min(1.0, (pct or 0) / 200.0))
         bar.get_style_context().remove_class("bar-ok")
         bar.get_style_context().remove_class("bar-warn")
         bar.get_style_context().remove_class("bar-high")
         bar.get_style_context().remove_class("bar-crit")
         bar.get_style_context().add_class("bar-" + cls.split("-")[1])
         cores = info.get("cores")
-        val_l.set_text("%.1f" % (pct or 0) + (" (/%d核)" % cores if cores else ""))
+        val_l.set_markup('<span size="large">%s</span>'
+                         % GLib.markup_escape_text("%.1f" % (pct or 0)
+                                                   + (" (/%d核)" % cores if cores else "")))
         mem = ("%d%% 内存" % (info["mem_used"] * 100.0 / info["mem_total"])) if info.get("mem_total") else ""
         disk = ("%d%% 磁盘" % (info["disk_used"] * 100.0 / info["disk_total"])) if info.get("disk_total") else ""
         parts = [label, "%s load" % info.get("load1", "?"), mem, disk, "运行 %s" % fmt_up(info.get("up_min"))]
-        info_l.set_text(" · ".join(p for p in parts if p))
-        card.set_tooltip_text("%s:%d\n%s" % (target_of(srv), port_of(srv),
-                                            info_l.get_text()))
+        text = " · ".join(p for p in parts if p)
+        info_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(text))
+        card.set_tooltip_text("%s:%d\n%s" % (target_of(srv), port_of(srv), text))
 
     def _make_srv_row(self, srv):
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin=7)
+        """服务器卡片：状态点 + 名称 + 网关标记 + load% + 进度条 + 内存/磁盘 + 目标地址。
+        点选卡片 → on_srv_selected → 右侧显示该服务器的 tmux 会话清单。"""
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        card.get_style_context().add_class("srv-card-down")   # 首次探测成功后转正常态
+
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
         dot = Gtk.Label(label="●")
         dot.get_style_context().add_class("dot-empty")
         dot.set_tooltip_text("尚未探测")
-        v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        tl = Gtk.Label(label="", xalign=0)
-        tl.set_markup("<b>%s</b>" % GLib.markup_escape_text(srv["name"]))
-        sl = Gtk.Label(label="", xalign=0)
-        sl.set_markup('<span size="small" fgcolor="#7f8c8d">%s</span>'
-                      % GLib.markup_escape_text("%s:%d" % (target_of(srv), port_of(srv))))
-        v.pack_start(tl, False, False, 0)
-        v.pack_start(sl, False, False, 0)
-        box.pack_start(dot, False, False, 0)
-        box.pack_start(v, True, True, 0)
-        self.srv_rows[box] = srv["name"]
-        self.srv_widgets[srv["name"]] = (dot, box)
-        return box
+        name_l = Gtk.Label(label="", xalign=0)
+        name_l.get_style_context().add_class("load-name")
+        name_l.set_markup("<b>%s</b>" % GLib.markup_escape_text(srv["name"]))
+        top.pack_start(dot, False, False, 0)
+        top.pack_start(name_l, True, True, 0)
+        via = jump_display(srv, self.cfg)
+        if via:
+            vl = Gtk.Label(label="↪", xalign=0)
+            vl.get_style_context().add_class("load-mut")
+            vl.set_tooltip_text("经网关: %s" % via)
+            top.pack_end(vl, False, False, 0)
+        val_l = Gtk.Label(label="—", xalign=1)
+        val_l.get_style_context().add_class("load-mut")
+        top.pack_end(val_l, False, False, 0)
+
+        bar = Gtk.ProgressBar()
+        bar.set_show_text(False)
+        bar.set_fraction(0.0)
+
+        info_l = Gtk.Label(label="", xalign=0)
+        info_l.get_style_context().add_class("load-mut")
+        info_l.set_markup('<span size="small">📊 探测中…</span>')
+        target_l = Gtk.Label(label="", xalign=0)
+        target_l.get_style_context().add_class("load-mut")
+        target_l.set_markup('<span size="small" fgcolor="#95a5a6">%s</span>'
+                            % GLib.markup_escape_text("%s:%d" % (target_of(srv), port_of(srv))))
+
+        card.pack_start(top, False, False, 0)
+        card.pack_start(bar, False, False, 0)
+        card.pack_start(info_l, False, False, 0)
+        card.pack_start(target_l, False, False, 0)
+        self.srv_rows[card] = srv["name"]
+        self.srv_widgets[srv["name"]] = (dot, card, val_l, bar, info_l)
+        return card
 
     def srv_by_name(self, name):
         for s in self.cfg["servers"]:
