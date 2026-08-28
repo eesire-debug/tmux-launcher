@@ -25,7 +25,6 @@ from gi.repository import Gtk, GLib, Gdk
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "tmux-launcher")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sessions.json")
-DEFAULT_HOST = "103.95.70.250"
 AUTO_RESCAN_MS = 30000
 LOAD_REFRESH_MS = 10_000   # 负荷刷新周期
 
@@ -71,10 +70,13 @@ def load_config():
             if isinstance(data, dict) and "sessions" in data:   # v1 → v2 迁移
                 servers = {}
                 for s in data["sessions"]:
-                    key = (s.get("host") or "", s.get("user") or "", s.get("port") or 22)
+                    host = s.get("host") or ""
+                    if not host:
+                        continue
+                    key = (host, s.get("user") or "", s.get("port") or 22)
                     if key not in servers:
-                        servers[key] = {"name": s.get("host") or DEFAULT_HOST,
-                                        "host": s.get("host") or DEFAULT_HOST,
+                        servers[key] = {"name": host,
+                                        "host": host,
                                         "user": s.get("user") or "",
                                         "port": int(s.get("port") or 22),
                                         "templates": []}
@@ -85,9 +87,7 @@ def load_config():
                 return cfg
         except Exception:
             pass
-    cfg = {"prefs": {"tab": True},
-           "servers": [{"name": DEFAULT_HOST, "host": DEFAULT_HOST,
-                        "user": "", "port": 22, "templates": []}]}
+    cfg = {"prefs": {"tab": True}, "servers": []}
     save_config(cfg)
     return cfg
 
@@ -290,13 +290,17 @@ def ptyxis_argv(shell_string, title, tab=True):
 
 
 def launch_terminal(shell_string, title, tab=True):
-    """用 ptyxis 执行 shell_string；tab=True 在现有窗口开新标签页（无窗口则新建）。
-    找不到终端返回 None。"""
-    term = shutil.which("ptyxis") or shutil.which("x-terminal-emulator")
+    """用 ptyxis/gnome-terminal 执行 shell_string；tab=True 在现有窗口开新标签页（无窗口则新建），
+    tab=False 每次开新窗口。找不到终端返回 None。"""
+    term = (shutil.which("ptyxis") or shutil.which("gnome-terminal")
+            or shutil.which("x-terminal-emulator"))
     if not term:
         return None
-    if os.path.basename(term) == "ptyxis":
+    name = os.path.basename(term)
+    if name == "ptyxis":
         argv = ptyxis_argv(shell_string, title, tab)
+    elif name == "gnome-terminal":
+        argv = [term, "--tab" if tab else "--window", "--", "bash", "-c", shell_string]
     else:
         argv = [term, "-e", "sh", "-c", shell_string]
     subprocess.Popen(argv)
@@ -1113,7 +1117,7 @@ class MainWindow(Gtk.Window):
             return e
 
         e_name = row(0, "显示名称", srv["name"] if srv else "")
-        e_host = row(1, "服务器地址", srv["host"] if srv else DEFAULT_HOST)
+        e_host = row(1, "服务器地址", srv["host"] if srv else "")
         e_user = row(2, "用户名(空=本机用户)", srv.get("user", "") if srv else "")
         e_port = row(3, "端口", str(port_of(srv)) if srv else "22")
 
@@ -1150,13 +1154,13 @@ class MainWindow(Gtk.Window):
         d.show_all()
         resp = d.run()
         name = e_name.get_text().strip()
-        host = e_host.get_text().strip() or DEFAULT_HOST
+        host = e_host.get_text().strip()
         user = e_user.get_text().strip()
         password = e_pass.get_text()
         active = e_jump.get_active()
         jump = jump_names[active - 1] if active > 0 else ""
         d.destroy()
-        if resp != Gtk.ResponseType.OK or not name:
+        if resp != Gtk.ResponseType.OK or not name or not host:
             return None
         try:
             port = int(e_port.get_text().strip() or "22")
