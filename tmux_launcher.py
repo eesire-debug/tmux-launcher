@@ -300,7 +300,8 @@ def launch_terminal(shell_string, title, tab=True):
     if name == "ptyxis":
         argv = ptyxis_argv(shell_string, title, tab)
     elif name == "gnome-terminal":
-        argv = [term, "--tab" if tab else "--window", "--", "bash", "-c", shell_string]
+        argv = [term, "--tab" if tab else "--window", "--title", title,
+                "--", "bash", "-c", shell_string]
     else:
         argv = [term, "-e", "sh", "-c", shell_string]
     subprocess.Popen(argv)
@@ -964,7 +965,7 @@ class MainWindow(Gtk.Window):
         if not srv:
             return
         argv = launch_terminal(attach_shell_string(srv, sess["name"], cfg=self.cfg),
-                               "tmux: %s" % sess["name"], tab=self._tab_mode())
+                               "%s@%s" % (sess["name"], srv["host"]), tab=self._tab_mode())
         if argv is None:
             self.status.set_text("⚠ 未找到终端模拟器，请手动执行: " + copy_attach_cmd(srv, sess["name"], self.cfg))
         else:
@@ -1233,7 +1234,7 @@ class MainWindow(Gtk.Window):
             tpls.append({"name": name, "startup": startup})
             srv["templates"] = tpls
             save_config(self.cfg)
-        argv = launch_terminal(attach_shell_string(srv, name, startup), "tmux: %s" % name,
+        argv = launch_terminal(attach_shell_string(srv, name, startup), "%s@%s" % (name, srv["host"]),
                                tab=self._tab_mode())
         if argv is None:
             self.status.set_text("⚠ 未找到终端模拟器")
