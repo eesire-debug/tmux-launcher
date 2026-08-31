@@ -21,6 +21,13 @@ import warnings
 
 import gi
 gi.require_version("Gtk", "3.0")
+try:
+    gi.require_version("Vte", "2.91")
+    from gi.repository import Vte
+    HAVE_VTE = True
+except Exception:
+    Vte = None
+    HAVE_VTE = False
 from gi.repository import Gtk, GLib, Gdk
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "tmux-launcher")
@@ -104,12 +111,13 @@ def save_config(cfg):
     ensure_askpass()
 
 
-ASKPASS_VERSION = "v2"
+ASKPASS_VERSION = "v3"
 
 
 def ensure_askpass():
-    """生成 SSH_ASKPASS 辅助脚本：从 ssh 密码提示文本提取 user@host，
-    按 TL_TARGETS(多目标空格分隔，支持 -J 跳板) 匹配配置里的密码。
+    """生成 SSH_ASKPASS 辅助脚本：优先用 ssh 密码提示文本里的 user@host 匹配配置里的密码
+    （多跳 -J 下每跳提示的主机不同，必须按提示取，否则两跳密码不同时目标跳会拿到跳板密码）；
+    提示解析不出时才回退 TL_TARGETS(多目标空格分隔)。
     密码不进命令行/环境；文件带版本标记，升级时自动重写。"""
     os.makedirs(CONFIG_DIR, exist_ok=True)
     content = '''#!/usr/bin/env python3
@@ -122,19 +130,21 @@ try:
 except Exception:
     sys.exit(1)
 prompt = sys.argv[1] if len(sys.argv) > 1 else ""
-targets = os.environ.get("TL_TARGETS", "").split()
+# 提示里解析出的主机排最前(最精确)，静态 TL_TARGETS 只作回退
+cands = []
 m = re.search(r"([\\w.-]+@)?([\\w.-]+)(?::\\d+)?", prompt)
 if m:
-    targets.append((m.group(1) or "") + m.group(2))
+    cands.append((m.group(1) or "") + m.group(2))
     if m.group(2):
-        targets.append(m.group(2))
+        cands.append(m.group(2))
+cands += os.environ.get("TL_TARGETS", "").split()
 def match(t):
     for s in cfg.get("servers", []):
         full = ("%%s@%%s" %% (s["user"], s["host"])) if s.get("user") else s["host"]
         if t in (full, s["host"]) and s.get("password"):
             return s["password"]
     return None
-for t in targets:
+for t in cands:
     if not t:
         continue
     pw = match(t)
@@ -255,6 +265,32 @@ def copy_attach_cmd(srv, session, cfg=None):
     return ("%sssh -t %s -p %d %s %s %s"
             % (_env_prefix(srv, cfg), " ".join(_jump_args(srv, cfg)), port_of(srv),
                _ssh_opts(srv), shlex.quote(target_of(srv)), shlex.quote(remote)))
+
+
+def term_ssh_argv(srv, command, cfg=None, shell=True):
+    """交互式 ssh 执行命令(强制 pty，top/tail -f 等动态输出才能在应用内终端里实时刷新)。
+    shell=True 时用 bash -lic 包装(登录+交互，同时 source ~/.profile 和 ~/.bashrc，
+    自定义命令/PATH export 才可用；注意部分机器的 .profile 并不 source .bashrc)；
+    密码认证时 env 带 askpass 免交互，支持 -J 跳板。返回 (argv, env)。"""
+    j = _jump_srv(srv, cfg)
+    env = None
+    if srv.get("password") or (j and j.get("password")):
+        targets = target_of(srv)
+        if j:
+            targets = "%s %s" % (target_of(j), targets)
+        env = dict(os.environ, TL_TARGETS=targets, TL_CONFIG=CONFIG_FILE,
+                   SSH_ASKPASS=ASKPASS, SSH_ASKPASS_REQUIRE="force")
+    argv = ["ssh", "-t"] + _jump_args(srv, cfg)
+    argv += ["-p", str(port_of(srv)),
+             "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
+             "-o", "StrictHostKeyChecking=accept-new"]
+    if srv.get("password"):
+        argv += ["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no",
+                 "-o", "NumberOfPasswordPrompts=1"]
+    if shell:
+        command = "bash -lic " + shlex.quote(command)
+    argv += [target_of(srv), command]
+    return argv, env
 
 
 def sftp_url(srv):
@@ -640,11 +676,16 @@ class MainWindow(Gtk.Window):
         self.b_refresh = Gtk.Button(label="🔄 重新探测")
         self.b_refresh.connect("clicked", self.on_rescan)
         self.b_refresh.set_sensitive(False)
+        self.b_term = Gtk.Button(label="📟 执行命令")
+        self.b_term.set_tooltip_text("在右侧新开终端 tab 动态显示命令输出 (top / mytop / tail -f …)")
+        self.b_term.connect("clicked", self.on_new_term)
+        self.b_term.set_sensitive(False)
         self.b_new = Gtk.Button(label="➕ 新建 tmux 会话")
         self.b_new.connect("clicked", self.on_new_session)
         self.b_new.set_sensitive(False)
         right_bar.pack_start(self.right_info, True, True, 0)
         right_bar.pack_end(self.b_new, False, False, 0)
+        right_bar.pack_end(self.b_term, False, False, 0)
         right_bar.pack_end(self.b_refresh, False, False, 0)
 
         self.sess_flow = Gtk.FlowBox()
@@ -665,9 +706,15 @@ class MainWindow(Gtk.Window):
         right.pack_start(sess_sw, True, True, 0)
         right.pack_start(self.right_hint, False, False, 0)
 
+        # ---- 右: Notebook — 会话清单与各命令终端平级可切换，终端 tab 占满整个右侧高度 ----
+        self.nb = Gtk.Notebook()
+        self.nb.set_show_border(False)
+        self.nb.append_page(right, Gtk.Label(label="📋 会话"))
+        self.nb.set_tab_reorderable(right, False)
+
         paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         paned.pack1(left, False, False)
-        paned.pack2(right, True, True)
+        paned.pack2(self.nb, True, True)
 
         self.status = Gtk.Label(label="就绪 · 状态探测走 ssh 密钥登录", xalign=0)
         self.status.set_margin_top(4)
@@ -852,6 +899,7 @@ class MainWindow(Gtk.Window):
             return
         self.right_info.set_text("🖥 %s · %s:%d" % (name, target_of(srv), port_of(srv)))
         self.b_refresh.set_sensitive(True)
+        self.b_term.set_sensitive(True)
         self.b_new.set_sensitive(True)
         self._scan(srv)
 
@@ -1244,11 +1292,116 @@ class MainWindow(Gtk.Window):
 
     # ---------- 杂项 ----------
 
+    # ---------- 命令终端 (VTE 内嵌 tab) ----------
+
+    @staticmethod
+    def _feed(term, text):
+        term.feed(text.encode("utf-8"))
+
+    def on_new_term(self, *a):
+        """弹窗输入命令，在选中服务器上开 VTE 终端 tab 动态执行。
+        服务器右键菜单触发时 sel_srv 已是右键点选的那台。"""
+        if not HAVE_VTE:
+            self.status.set_text("⚠ 缺少 VTE 终端库，无法打开命令终端 (需安装 gir1.2-vte-2.91)")
+            return
+        if not self.cfg["servers"]:
+            self.status.set_text("⚠ 请先添加服务器")
+            return
+        d = Gtk.Dialog(title="执行命令 — 打开动态输出 tab", transient_for=self, modal=True)
+        d.add_buttons("取消", Gtk.ResponseType.CANCEL, "打开", Gtk.ResponseType.OK)
+        grid = Gtk.Grid(column_spacing=8, row_spacing=6, margin=14)
+        d.get_content_area().add(grid)
+
+        lb0 = Gtk.Label(label="目标服务器", xalign=0)
+        grid.attach(lb0, 0, 0, 1, 1)
+        cb_srv = Gtk.ComboBoxText()
+        for s in self.cfg["servers"]:
+            via = (" via %s" % s["jump"]) if s.get("jump") else ""
+            cb_srv.append(s["name"], "%s  (%s%s)" % (s["name"], s["host"], via))
+        grid.attach(cb_srv, 1, 0, 2, 1)
+        if self.sel_srv:
+            for i, s in enumerate(self.cfg["servers"]):
+                if s["name"] == self.sel_srv:
+                    cb_srv.set_active(i)
+                    break
+
+        lb1 = Gtk.Label(label="命令(远端执行, q / Ctrl+C 停止)", xalign=0)
+        grid.attach(lb1, 0, 1, 1, 1)
+        e_cmd = Gtk.Entry()
+        e_cmd.set_text("top")
+        e_cmd.set_placeholder_text("top / htop / tail -f /var/log/syslog / df -h ...")
+        grid.attach(e_cmd, 1, 1, 2, 1)
+
+        cb_login = Gtk.CheckButton(label="完整 shell 运行 (bash -lic，source ~/.profile + ~/.bashrc，自定义命令/PATH export 需要)")
+        cb_login.set_active(True)
+        grid.attach(cb_login, 1, 2, 2, 1)
+
+        d.show_all()
+        resp = d.run()
+        cmd = e_cmd.get_text().strip()
+        idx = cb_srv.get_active()
+        use_shell = cb_login.get_active()
+        d.destroy()
+        if resp != Gtk.ResponseType.OK or not cmd or idx < 0:
+            return
+        srv = self.srv_by_name(self.cfg["servers"][idx]["name"])
+        if srv:
+            self.open_term_tab(srv, cmd, shell=use_shell)
+
+    def open_term_tab(self, srv, cmd, shell=True):
+        term = Vte.Terminal()
+        term.set_scrollback_lines(5000)
+        term.set_audible_bell(False)
+        term.set_mouse_autohide(True)
+        argv, env = term_ssh_argv(srv, cmd, cfg=self.cfg, shell=shell)
+        envv = ["%s=%s" % (k, v) for k, v in env.items()] if env else None
+
+        title = "%s @ %s" % (cmd, srv["host"])
+        tbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        tlb = Gtk.Label(label=title, xalign=0)
+        tlb.set_size_request(100, -1)
+        tclose = Gtk.Button(label="✕")
+        tclose.set_relief(Gtk.ReliefStyle.NONE)
+        tclose.set_tooltip_text("关闭 (终止命令)")
+        tclose.connect("clicked", lambda *a: self.close_term_tab(term))
+        tbox.pack_start(tlb, True, True, 0)
+        tbox.pack_end(tclose, False, False, 0)
+        tbox.show_all()
+
+        self.nb.append_page(term, tbox)
+        self.nb.set_tab_reorderable(term, True)
+        term.connect("child-exited", self.on_term_exited, tlb)
+        term.show()
+        self.nb.set_current_page(self.nb.page_num(term))
+        self.status.set_text("📟 已在 %s (%s) 上启动: %s" % (srv["name"], srv["host"], cmd))
+        term.spawn_async(Vte.PtyFlags.DEFAULT,
+                         os.path.expanduser("~"),
+                         argv, envv,
+                         GLib.SpawnFlags.DEFAULT,
+                         None, None, -1, None,
+                         self.on_term_spawned, None)
+
+    def on_term_spawned(self, term, pid, error, *a):
+        if error is not None:
+            self._feed(term, "\r\n⚠ 启动失败: %s\r\n" % error.message)
+
+    def on_term_exited(self, term, status, tlb):
+        code = (status >> 8) & 0xff
+        tlb.set_text(tlb.get_text() + "  ✓ 已结束")
+        self._feed(term, "\r\n\x1b[90m[命令已结束, exit=%d] 关 tab 或点 ➕ 新命令重开\x1b[0m\r\n" % code)
+
+    def close_term_tab(self, term):
+        page = self.nb.page_num(term)
+        if page >= 0:
+            self.nb.remove_page(page)
+            term.destroy()
+
     def build_menus(self):
         self.srv_menu = Gtk.Menu()
         for label, cb in (("🔌 打开 SSH", self.on_connect_ssh),
                           ("📂 SFTP 终端", self.on_sftp_terminal),
                           ("📁 SFTP 文件管理器", self.on_sftp_fm),
+                          ("📟 执行命令 (动态输出)", self.on_new_term),
                           ("✏️ 编辑", self.on_edit_server),
                           ("📋 复制 ssh 命令", self.on_copy_ssh_cmd),
                           ("🗑 删除", self.on_delete_server)):
