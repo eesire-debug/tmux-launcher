@@ -28,7 +28,6 @@ terminal tabs, load dashboard, startup templates — all included.
 | 🪓 **Kill session** | Right-click any session → `tmux kill-session` (single or all) |
 | 🚇 **Jump / Gateway** | One-hop `ssh -J` nesting, password or key auth (asks askpass when needed) |
 | 🔐 **askpass** | Per-host password remembered; non-interactive logins even without an SSH agent |
-| 🌐 **UI language** | Header-bar toggle **中文 / English**, persisted in `prefs.lang` |
 
 ---
 
@@ -90,7 +89,6 @@ Search for **Tmux Launcher** in GNOME Activities afterwards.
 2. Click the server you just added → right side starts probing `tmux ls` automatically
 3. Double-click any session card → attaches in your terminal
 4. Toggle **📑 Tab Mode** in the header: on = reuse the current terminal window's tab; off = new window every time
-5. Click **🌐** in the header to switch UI language (中文 ↔ English)
 
 **Common operations**
 
@@ -103,7 +101,6 @@ Search for **Tmux Launcher** in GNOME Activities afterwards.
 | Copy ssh command | Right-click session → "Copy connect command" |
 | Kill a session | Right-click session → "Delete session" |
 | Server unreachable | Look for the **✗ unreachable** badge; click ▶ to retry manually |
-| Switch UI language | **🌐** in the header; persists in `prefs.lang` |
 
 **Configuration file**
 
@@ -117,7 +114,7 @@ Search for **Tmux Launcher** in GNOME Activities afterwards.
 
 ```json
 {
-  "prefs": { "tab": true, "lang": "en" },
+  "prefs": { "tab": true },
   "servers": [
     {
       "name": "prod-1",
@@ -154,7 +151,7 @@ Search for **Tmux Launcher** in GNOME Activities afterwards.
 - **Probe and connect are decoupled**: probing uses `BatchMode=yes` + `-T` for silent, time-bounded scans; connecting goes through your terminal. Even if probing fails on auth, you can still right-click the server → "New session" or "SFTP".
 - **askpass exact host match**: `SSH_ASKPASS=askpass.py` matches ssh's prompt (`user@host's password:`) exactly. Each hop in a multi-hop chain uses its own password (v3 fixed a bug where the target hop would get the wrong password when two hops used different ones).
 - **Embedded vs external terminal**: the embedded tab uses VTE (`ssh -tt`) and is great for live output; for real work you'll still prefer the external tab (when Tab Mode is on) — full keybindings, theming, copy/paste.
-- **Minimal i18n**: a built-in `LANGS` dict + `t()` function, every visible string is keyed. Switching language at runtime only re-renders static text — no app restart needed.
+- **Minimal i18n scaffolding**: a built-in `LANGS` dict + `t()` function with English-only strings. Change `LANG = "en"` at the top of `tmux_launcher.py` to `"zh"` to switch instantly without any restart.
 
 ---
 
@@ -168,7 +165,7 @@ Search for **Tmux Launcher** in GNOME Activities afterwards.
 | Jump host fails to connect | Make sure the jump host itself is added and **reachable via SSH** |
 | Wrong password | Re-edit the server and re-enter the password; askpass never replays stale passwords |
 | Embedded terminal tab button is missing | Install `gir1.2-vte-2.91`; only that feature degrades, everything else still works |
-| Want to revert default language | Edit `~/.config/tmux-launcher/sessions.json` → `prefs.lang`, or click 🌐 in the header |
+| Want to switch languages | UI is locked to English; change `LANG = "en"` at the top of `tmux_launcher.py` to `"zh"` |
 
 ---
 

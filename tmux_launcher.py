@@ -65,7 +65,10 @@ list.srvlist row { padding: 0; min-height: 0; }   /* full-width cards, no row pa
 # ---------------- i18n ----------------
 #
 # 极简自实现: 一个 LANGS 字典 + t() 函数。所有可见字符串按 key 索引,
-# 找不到时原样返回 key (便于发现漏翻)。运行时通过顶栏 🌐 切换, 写入 prefs.lang。
+# 找不到时原样返回 key (便于发现漏翻)。UI 锁定为英文；LANGS["zh"]
+# 仅作翻译参考保留，不渲染。
+
+LANG = "en"   # 锁定为英文；如需启用其他语言，把这里改成 "zh" 并去掉顶栏注释即可
 
 LANGS = {
     "zh": {
@@ -379,15 +382,6 @@ LANGS = {
     },
 }
 
-def detect_lang(cfg):
-    """从 prefs > 环境变量 LANG 推断界面语言。"""
-    pref = (cfg.get("prefs", {}) or {}).get("lang")
-    if pref in LANGS:
-        return pref
-    env = os.environ.get("LANG", "") or os.environ.get("LC_ALL", "")
-    return "en" if env.lower().startswith("en") else "zh"
-
-
 def t(key, *args):
     """按当前 LANG 取词条。缺失则返回 key（调试时立刻可见）。"""
     s = LANGS.get(LANG, {}).get(key, key)
@@ -406,10 +400,9 @@ def load_config():
                 data = json.load(f)
             if isinstance(data, dict) and "servers" in data:
                 if "prefs" not in data:
-                    data["prefs"] = {"tab": True, "lang": detect_lang({})}
+                    data["prefs"] = {"tab": True}
                     save_config(data)
                 else:
-                    data["prefs"].setdefault("lang", detect_lang(data))
                     if "tab" not in data["prefs"]:
                         data["prefs"]["tab"] = True
                         save_config(data)
@@ -429,12 +422,12 @@ def load_config():
                                         "templates": []}
                     if s.get("startup", "").strip():
                         servers[key]["templates"].append({"name": s["name"], "startup": s["startup"]})
-                cfg = {"prefs": {"tab": True, "lang": detect_lang({})}, "servers": list(servers.values())}
+                cfg = {"prefs": {"tab": True}, "servers": list(servers.values())}
                 save_config(cfg)
                 return cfg
         except Exception:
             pass
-    cfg = {"prefs": {"tab": True, "lang": detect_lang({})}, "servers": []}
+    cfg = {"prefs": {"tab": True}, "servers": []}
     save_config(cfg)
     return cfg
 
@@ -948,9 +941,7 @@ class MainWindow(Gtk.Window):
                 "notmux": t("srv_status_notmux")}.get(st, "")
 
     def __init__(self):
-        global LANG
         self.cfg = load_config()
-        LANG = detect_lang(self.cfg)
         super().__init__(title=t("win_title"))
         self.set_default_size(900, 560)
         # WM_CLASS 必须与 .desktop 的 StartupWMClass 一致，GNOME dock 才显示正确图标
@@ -985,11 +976,6 @@ class MainWindow(Gtk.Window):
         b_add = Gtk.Button(label=t("add_server"))
         b_add.connect("clicked", self.on_add_server)
         self.hb.pack_start(b_add)
-
-        self.lang_btn = Gtk.Button(label="🌐 " + t("lang_target"))
-        self.lang_btn.set_tooltip_text(t("lang_toggle_tip"))
-        self.lang_btn.connect("clicked", self.on_lang_toggle)
-        self.hb.pack_end(self.lang_btn)
 
         self.tab_btn = Gtk.ToggleButton(label=t("tab_mode"))
         self.tab_btn.set_active(bool(self.cfg.get("prefs", {}).get("tab", True)))
@@ -1064,7 +1050,7 @@ class MainWindow(Gtk.Window):
         self.nb_tab_sessions_label = Gtk.Label(label=t("notebook_sessions"))
         self.nb.append_page(right, self.nb_tab_sessions_label)
         self.nb.set_tab_reorderable(right, False)
-        self._sessions_page_widget = right   # 保存以便 _apply_texts 时重置标签
+        self._sessions_page_widget = right
 
         paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         paned.pack1(left, False, False)
@@ -1088,44 +1074,6 @@ class MainWindow(Gtk.Window):
         self.refresh_loads(first=True)
 
     # ---------- i18n ----------
-
-    def on_lang_toggle(self, *a):
-        global LANG
-        LANG = "en" if LANG == "zh" else "zh"
-        self.cfg.setdefault("prefs", {})["lang"] = LANG
-        save_config(self.cfg)
-        self._apply_texts()
-
-    def _apply_texts(self):
-        """语言切换后重绘所有静态文本。会话卡片/服务器卡片是动态生成的，
-        直接 reload_servers() 重画最干净; 其余按钮/标签就地 set_text。"""
-        self.set_title(t("win_title"))
-        self.hb.set_title(t("win_title"))
-        self.hb.set_subtitle(t("subtitle", len(self.cfg["servers"])))
-        self.lang_btn.set_label("🌐 " + t("lang_target"))
-        self.lang_btn.set_tooltip_text(t("lang_toggle_tip"))
-        self.tab_btn.set_label(t("tab_mode"))
-        self.tab_btn.set_tooltip_text(t("tab_mode_tip"))
-        self.left_label.set_text(t("left_title"))
-        self.b_load_all.set_tooltip_text(t("load_all_tip"))
-        self.right_info.set_text(t("right_hint_empty"))
-        self.b_refresh.set_label(t("rescan"))
-        self.b_term.set_label(t("exec_cmd"))
-        self.b_term.set_tooltip_text(t("exec_cmd_tip"))
-        self.b_new.set_label(t("new_session"))
-        self.nb_tab_sessions_label.set_text(t("notebook_sessions"))
-        self.status.set_text(t("status_ready"))
-        # 重画菜单 + 服务器卡片 (卡片里的 tooltip/状态文本需要重生成)
-        self.build_menus()
-        self.reload_servers()
-        # 重新触发当前选中服务器的探测, 让状态文字 / 右栏 hint 都换成新语言
-        self.sel_srv = None
-        self.right_info.set_text(t("right_hint_empty"))
-        self.right_hint.set_text("")
-        for child in self.sess_flow.get_children():
-            self.sess_flow.remove(child)
-        self.sess_widgets = {}
-        self._initial_select()
 
     # ---------- 左列: 服务器 ----------
 

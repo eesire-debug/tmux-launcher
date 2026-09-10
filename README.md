@@ -27,7 +27,6 @@
 | 🪓 **杀会话** | 右键任意会话即可 `tmux kill-session`，可指定单个或全部 |
 | 🚇 **跳板 / 网关** | 一层 `ssh -J` 嵌套，支持密码或密钥认证（问询时自动选 askpass） |
 | 🔐 **askpass 免密** | 每台机器单独记密码，连接时自动调用，SSH Agent 不存在时也能免交互 |
-| 🌐 **界面语言** | 顶栏一键切换 **中文 / English**，写到 `prefs.lang` 持久化 |
 
 ---
 
@@ -89,7 +88,6 @@ cp tmux-launcher-256.png ~/.local/share/icons/hicolor/256x256/apps/tmux-launcher
 2. 左侧点选刚加的服务器 → 右侧**自动开始探测** `tmux ls`
 3. 双击任意会话卡片 → 在终端里 attach 进去
 4. 顶栏 **📑 标签页模式** 切换：开 = 复用现有终端窗口的 tab；关 = 每次新窗口
-5. 顶栏 **🌐** 切换界面语言（中文 ↔ English）
 
 **常用操作**
 
@@ -102,7 +100,6 @@ cp tmux-launcher-256.png ~/.local/share/icons/hicolor/256x256/apps/tmux-launcher
 | 复制 ssh 命令 | 右键会话 → "复制连接命令" |
 | 杀掉会话 | 右键会话 → "删除会话" |
 | 服务器不通 | 看左侧卡片右下角的 **✗ 不可达** 标记；点 ▶ 手动重试 |
-| 切换界面语言 | 顶栏 **🌐** 按钮，写入 `prefs.lang`，下次启动自动恢复 |
 
 **配置文件**
 
@@ -116,7 +113,7 @@ cp tmux-launcher-256.png ~/.local/share/icons/hicolor/256x256/apps/tmux-launcher
 
 ```json
 {
-  "prefs": { "tab": true, "lang": "zh" },
+  "prefs": { "tab": true },
   "servers": [
     {
       "name": "prod-1",
@@ -172,7 +169,7 @@ cp tmux-launcher-256.png ~/.local/share/icons/hicolor/256x256/apps/tmux-launcher
 | 跳板连不上 | 确认跳板机器也已添加，且**跳板本身能 SSH 登录** |
 | 密码错 | 重新编辑服务器，重填密码；askpass 不会回放老密码 |
 | VTE 终端 tab 按钮不见 | 装 `gir1.2-vte-2.91`；缺失时仅该功能降级，其余正常 |
-| 想改回默认语言 | 编辑 `~/.config/tmux-launcher/sessions.json` 的 `prefs.lang`，或顶栏 🌐 切 |
+| 想改回默认语言 | UI 锁定英文，如需中文改 `tmux_launcher.py` 里的 `LANG = "en"` 为 `"zh"` 即可 |
 
 ---
 
