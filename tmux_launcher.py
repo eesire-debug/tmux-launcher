@@ -72,15 +72,15 @@ LANGS = {
         # ---- 主窗口 / 顶栏 ----
         "win_title":         "🔗 Tmux 连接器",
         "subtitle":          "%d 台服务器 · 自动探测 tmux",
-        "lang_toggle_tip":   "切换界面语言 / Switch language",
+        "lang_toggle_tip":   "切换界面语言",
+        "lang_target":       "English",
         "add_server":        "➕ 添加服务器",
         "tab_mode":          "📑 标签页模式",
         "tab_mode_tip":      "连接时在现有 ptyxis 窗口开新标签页；关闭则每次开新窗口",
         "tab_mode_on":       "开",
         "tab_mode_off":      "关（新窗口）",
         "tab_mode_status":   "📑 标签页模式: %s",
-        "lang_name":         "中文",
-
+        
         # ---- 左栏 ----
         "left_title":        "🖥 服务器 · 负荷",
         "load_all_tip":      "手动刷新全部服务器负荷",
@@ -234,15 +234,15 @@ LANGS = {
     "en": {
         "win_title":         "🔗 Tmux Launcher",
         "subtitle":          "%d servers · auto-detect tmux",
-        "lang_toggle_tip":   "Switch UI language",
+        "lang_toggle_tip":   "Switch language",
+        "lang_target":       "中文",
         "add_server":        "➕ Add server",
         "tab_mode":          "📑 Tab mode",
         "tab_mode_tip":      "Reuse the existing ptyxis window as a new tab; off opens a new window each time",
         "tab_mode_on":       "on",
         "tab_mode_off":      "off (new window)",
         "tab_mode_status":   "📑 Tab mode: %s",
-        "lang_name":         "EN",
-
+        
         "left_title":        "🖥 Servers · Load",
         "load_all_tip":      "Manually refresh load info for all servers",
         "right_hint_empty":  "Pick a server on the left",
@@ -378,9 +378,6 @@ LANGS = {
         "disconnect_prompt": "Disconnected, press Enter to close the window...",
     },
 }
-
-LANG = "zh"   # 全局当前语言; main() 启动时按 prefs / 环境重置
-
 
 def detect_lang(cfg):
     """从 prefs > 环境变量 LANG 推断界面语言。"""
@@ -989,7 +986,7 @@ class MainWindow(Gtk.Window):
         b_add.connect("clicked", self.on_add_server)
         self.hb.pack_start(b_add)
 
-        self.lang_btn = Gtk.Button(label="🌐 " + t("lang_name"))
+        self.lang_btn = Gtk.Button(label="🌐 " + t("lang_target"))
         self.lang_btn.set_tooltip_text(t("lang_toggle_tip"))
         self.lang_btn.connect("clicked", self.on_lang_toggle)
         self.hb.pack_end(self.lang_btn)
@@ -1105,7 +1102,7 @@ class MainWindow(Gtk.Window):
         self.set_title(t("win_title"))
         self.hb.set_title(t("win_title"))
         self.hb.set_subtitle(t("subtitle", len(self.cfg["servers"])))
-        self.lang_btn.set_label("🌐 " + t("lang_name"))
+        self.lang_btn.set_label("🌐 " + t("lang_target"))
         self.lang_btn.set_tooltip_text(t("lang_toggle_tip"))
         self.tab_btn.set_label(t("tab_mode"))
         self.tab_btn.set_tooltip_text(t("tab_mode_tip"))
