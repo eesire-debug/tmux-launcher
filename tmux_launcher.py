@@ -62,6 +62,344 @@ list.srvlist row { padding: 0; min-height: 0; }   /* full-width cards, no row pa
 .bar-crit   { background: #e74c3c; border-radius: 4px; min-height: 8px; }
 """
 
+# ---------------- i18n ----------------
+#
+# 极简自实现: 一个 LANGS 字典 + t() 函数。所有可见字符串按 key 索引,
+# 找不到时原样返回 key (便于发现漏翻)。运行时通过顶栏 🌐 切换, 写入 prefs.lang。
+
+LANGS = {
+    "zh": {
+        # ---- 主窗口 / 顶栏 ----
+        "win_title":         "🔗 Tmux 连接器",
+        "subtitle":          "%d 台服务器 · 自动探测 tmux",
+        "lang_toggle_tip":   "切换界面语言 / Switch language",
+        "add_server":        "➕ 添加服务器",
+        "tab_mode":          "📑 标签页模式",
+        "tab_mode_tip":      "连接时在现有 ptyxis 窗口开新标签页；关闭则每次开新窗口",
+        "tab_mode_on":       "开",
+        "tab_mode_off":      "关（新窗口）",
+        "tab_mode_status":   "📑 标签页模式: %s",
+        "lang_name":         "中文",
+
+        # ---- 左栏 ----
+        "left_title":        "🖥 服务器 · 负荷",
+        "load_all_tip":      "手动刷新全部服务器负荷",
+        "right_hint_empty":  "请在左侧选择服务器",
+
+        # ---- 右栏工具栏 ----
+        "rescan":            "🔄 重新探测",
+        "exec_cmd":          "📟 执行命令",
+        "exec_cmd_tip":      "在右侧新开终端 tab 动态显示命令输出 (top / mytop / tail -f …)",
+        "new_session":       "➕ 新建 tmux 会话",
+        "notebook_sessions": "📋 会话",
+
+        # ---- 状态栏 ----
+        "status_ready":      "就绪 · 状态探测走 ssh 密钥登录",
+
+        # ---- 服务器卡片 ----
+        "srv_not_probed":    "尚未探测",
+        "srv_offline":       "⚠ 离线",
+        "srv_unreachable":   "📊 不可达",
+        "srv_loading":       "📊 探测中…",
+        "ping_tip":          "ssh 往返延迟(含跳板链路)",
+        "via_jump":          "经网关: %s",
+
+        # ---- 探测结果 ----
+        "scanning":          "🔄 正在探测 %s 上的 tmux 实例...",
+        "sess_hint":         "双击会话即连接 · 右键更多操作 · 每 30 秒自动刷新",
+        "sess_hint_fail":    "ℹ️ %s — %s。点「➕ 新建 tmux 会话」创建。",
+        "scan_count":        "🔍 %s: 探测到 %d 个 tmux 会话",
+        "scan_msg":          "🔍 %s: %s",
+        "msg_ssh_fail":      "SSH 失败(检查地址/用户名/密钥)",
+        "msg_no_tmux":       "服务器上未安装 tmux",
+        "msg_empty":         "tmux 已装，但没有任何会话",
+        "msg_unreachable":   "服务器不可达",
+        "msg_ssh_timeout":   "SSH 超时",
+        "msg_ssh_error":     "SSH 失败",
+        "msg_bad_output":    "输出异常",
+        "srv_status_ok":     "● 可连接，tmux 运行中",
+        "srv_status_empty":  "○ 可连接，无 tmux 会话",
+        "srv_status_down":   "✗ 不可达",
+        "srv_status_notmux": "⚠ 未安装 tmux",
+
+        # ---- 会话卡片 ----
+        "sess_running_tip":  "运行中",
+        "sess_meta":         "%s 个窗口 · 创建于 %s",
+
+        # ---- 动作相关 ----
+        "no_terminal":       "⚠ 未找到终端模拟器，请手动执行: %s",
+        "no_terminal_short": "⚠ 未找到终端模拟器",
+        "opening_tmux":      "🔌 正在打开终端连接 %s → tmux %s ...",
+        "opening_ssh":       "🔌 正在打开 SSH 终端 %s ...",
+        "opening_sftp_term": "📂 正在打开 SFTP 终端 %s ...",
+        "no_fm":             "⚠ 未找到文件管理器/gio，请手动打开 %s",
+        "opened_sftp":       "📁 已请求打开 %s",
+        "copied_connect":    "📋 已复制: %s",
+        "copied_ssh":        "📋 已复制 ssh 登录命令",
+        "killed":            "💀 已终止会话 %s",
+        "kill_fail":         "⚠ 终止失败: %s",
+        "kill_confirm":      "终止 tmux 会话「%s」?",
+        "kill_confirm_sub":  "执行 tmux kill-session -t %s，会话内所有进程都会被结束",
+        "select_sess_first": "⚠ 请先在右侧选中一个 tmux 会话",
+        "create_and_conn":   "🔌 正在创建并连接 tmux 会话「%s」...",
+
+        # ---- 已添加 / 删除 ----
+        "dup_server":        "⚠ 服务器名称「%s」已存在",
+        "added_server":      "➕ 已添加服务器「%s」",
+        "select_server":     "⚠ 请先选中一个服务器",
+        "dup_name":          "⚠ 名称「%s」已存在",
+        "saved_server":      "✏️ 已保存服务器「%s」",
+        "deleted_server":    "🗑 已删除服务器「%s」",
+
+        # ---- 服务器对话框 ----
+        "dlg_edit_server":   "编辑服务器",
+        "dlg_add_server":    "添加服务器",
+        "dlg_cancel":        "取消",
+        "dlg_save":          "保存",
+        "dlg_field_name":    "显示名称",
+        "dlg_field_host":    "服务器地址",
+        "dlg_field_user":    "用户名(空=本机用户)",
+        "dlg_field_port":    "端口",
+        "dlg_field_pass":    "密码(可选)",
+        "dlg_pass_ph":       "留空 = 使用 SSH 密钥",
+        "dlg_show":          "显示",
+        "dlg_field_jump":    "网关(可选, 跳板)",
+        "dlg_jump_none":     "（无 · 直连）",
+        "dlg_jump_via":      "↪ %s (%s)",
+
+        # ---- 删除确认 ----
+        "del_confirm":       "删除服务器「%s」?",
+        "del_confirm_sub":   "只删本地配置，不影响服务器本身",
+
+        # ---- 新建会话对话框 ----
+        "dlg_new_session":   "新建 tmux 会话 — %s",
+        "dlg_create_conn":   "创建并连接",
+        "dlg_sess_name":     "会话名",
+        "dlg_startup":       "启动命令(可选)",
+        "dlg_template":      "模板",
+        "dlg_no_tpl":        "（不使用模板）",
+        "dlg_tpl_label":     "%s: %s",
+        "dlg_save_tpl":      "同时存为模板，下次直接选",
+
+        # ---- 命令终端对话框 ----
+        "dlg_exec_cmd":      "执行命令 — 打开动态输出 tab",
+        "dlg_open":          "打开",
+        "dlg_target":        "目标服务器",
+        "dlg_srv_with_via":  "%s  (%s%s)",
+        "via_suffix":        " via %s",
+        "dlg_cmd":           "命令(远端执行, q / Ctrl+C 停止)",
+        "dlg_cmd_ph":        "top / htop / tail -f /var/log/syslog / df -h ...",
+        "dlg_full_shell":    "完整 shell 运行 (bash -lic，source ~/.profile + ~/.bashrc，自定义命令/PATH export 需要)",
+        "missing_vte":       "⚠ 缺少 VTE 终端库，无法打开命令终端 (需安装 gir1.2-vte-2.91)",
+        "no_server":         "⚠ 请先添加服务器",
+        "term_started":      "📟 已在 %s (%s) 上启动: %s",
+        "term_close_tip":    "关闭 (终止命令)",
+        "term_done_suffix":  "  ✓ 已结束",
+        "term_exit_msg":     "\r\n\x1b[90m[命令已结束, exit=%d] 关 tab 或点 ➕ 新命令重开\x1b[0m\r\n",
+        "term_spawn_fail":   "\r\n⚠ 启动失败: %s\r\n",
+
+        # ---- 菜单 ----
+        "menu_open_ssh":     "🔌 打开 SSH",
+        "menu_sftp_term":    "📂 SFTP 终端",
+        "menu_sftp_fm":      "📁 SFTP 文件管理器",
+        "menu_exec_cmd":     "📟 执行命令 (动态输出)",
+        "menu_edit":         "✏️ 编辑",
+        "menu_copy_ssh":     "📋 复制 ssh 命令",
+        "menu_delete":       "🗑 删除",
+        "menu_connect":      "🔌 连接",
+        "menu_copy_cmd":     "📋 复制命令",
+        "menu_kill":         "💀 终止会话",
+
+        # ---- 负荷 / 时长 ----
+        "load_ok":           "负荷正常",
+        "load_light":        "负荷轻",
+        "load_med":          "负荷中",
+        "load_high":         "负荷高",
+        "load_crit":         "负荷过载",
+        "mem_pct":           "内存",
+        "disk_pct":          "磁盘",
+        "up_label":          "运行 ",
+        "up_min":            "%d 分钟",
+        "up_hm":             "%d 小时 %d 分",
+        "up_dh":             "%d 天 %d 小时",
+        "rel_now":           "刚刚",
+        "rel_min":           "%d分钟前",
+        "rel_hr":            "%d小时前",
+        "rel_day":           "%d天前",
+
+        # ---- 关闭提示 ----
+        "disconnect_prompt": "已断开，回车关闭窗口...",
+    },
+
+    "en": {
+        "win_title":         "🔗 Tmux Launcher",
+        "subtitle":          "%d servers · auto-detect tmux",
+        "lang_toggle_tip":   "Switch UI language",
+        "add_server":        "➕ Add server",
+        "tab_mode":          "📑 Tab mode",
+        "tab_mode_tip":      "Reuse the existing ptyxis window as a new tab; off opens a new window each time",
+        "tab_mode_on":       "on",
+        "tab_mode_off":      "off (new window)",
+        "tab_mode_status":   "📑 Tab mode: %s",
+        "lang_name":         "EN",
+
+        "left_title":        "🖥 Servers · Load",
+        "load_all_tip":      "Manually refresh load info for all servers",
+        "right_hint_empty":  "Pick a server on the left",
+
+        "rescan":            "🔄 Rescan",
+        "exec_cmd":          "📟 Run command",
+        "exec_cmd_tip":      "Open a terminal tab on the right to show live command output (top / mytop / tail -f …)",
+        "new_session":       "➕ New tmux session",
+        "notebook_sessions": "📋 Sessions",
+
+        "status_ready":      "Ready · probe uses SSH key auth",
+
+        "srv_not_probed":    "Not probed yet",
+        "srv_offline":       "⚠ Offline",
+        "srv_unreachable":   "📊 Unreachable",
+        "srv_loading":       "📊 Probing…",
+        "ping_tip":          "SSH round-trip latency (incl. jump hops)",
+        "via_jump":          "Via gateway: %s",
+
+        "scanning":          "🔄 Scanning tmux on %s ...",
+        "sess_hint":         "Double-click a session to connect · Right-click for more · Auto-refresh every 30 s",
+        "sess_hint_fail":    "ℹ️ %s — %s. Click ➕ New tmux session to create one.",
+        "scan_count":        "🔍 %s: found %d tmux session(s)",
+        "scan_msg":          "🔍 %s: %s",
+        "msg_ssh_fail":      "SSH failed (check host/user/key)",
+        "msg_no_tmux":       "tmux not installed on server",
+        "msg_empty":         "tmux installed but no sessions",
+        "msg_unreachable":   "Server unreachable",
+        "msg_ssh_timeout":   "SSH timed out",
+        "msg_ssh_error":     "SSH failed",
+        "msg_bad_output":    "Bad output",
+        "srv_status_ok":     "● Reachable, tmux running",
+        "srv_status_empty":  "○ Reachable, no tmux sessions",
+        "srv_status_down":   "✗ Unreachable",
+        "srv_status_notmux": "⚠ tmux not installed",
+
+        "sess_running_tip":  "Running",
+        "sess_meta":         "%s window(s) · created %s",
+
+        "no_terminal":       "⚠ No terminal emulator found, run manually: %s",
+        "no_terminal_short": "⚠ No terminal emulator found",
+        "opening_tmux":      "🔌 Opening terminal: %s → tmux %s ...",
+        "opening_ssh":       "🔌 Opening SSH terminal: %s ...",
+        "opening_sftp_term": "📂 Opening SFTP terminal: %s ...",
+        "no_fm":             "⚠ No file manager / gio found, open manually: %s",
+        "opened_sftp":       "📁 Requested open: %s",
+        "copied_connect":    "📋 Copied: %s",
+        "copied_ssh":        "📋 Copied ssh login command",
+        "killed":            "💀 Killed session %s",
+        "kill_fail":         "⚠ Kill failed: %s",
+        "kill_confirm":      "Kill tmux session “%s”?",
+        "kill_confirm_sub":  "Run tmux kill-session -t %s — all processes inside the session will end.",
+        "select_sess_first": "⚠ Select a tmux session on the right first",
+        "create_and_conn":   "🔌 Creating and connecting tmux session “%s” ...",
+
+        "dup_server":        "⚠ Server name “%s” already exists",
+        "added_server":      "➕ Added server “%s”",
+        "select_server":     "⚠ Select a server first",
+        "dup_name":          "⚠ Name “%s” already exists",
+        "saved_server":      "✏️ Saved server “%s”",
+        "deleted_server":    "🗑 Deleted server “%s”",
+
+        "dlg_edit_server":   "Edit server",
+        "dlg_add_server":    "Add server",
+        "dlg_cancel":        "Cancel",
+        "dlg_save":          "Save",
+        "dlg_field_name":    "Display name",
+        "dlg_field_host":    "Host",
+        "dlg_field_user":    "User (empty = local user)",
+        "dlg_field_port":    "Port",
+        "dlg_field_pass":    "Password (optional)",
+        "dlg_pass_ph":       "Empty = use SSH key",
+        "dlg_show":          "Show",
+        "dlg_field_jump":    "Gateway (optional, jump host)",
+        "dlg_jump_none":     "(none · direct)",
+        "dlg_jump_via":      "↪ %s (%s)",
+
+        "del_confirm":       "Delete server “%s”?",
+        "del_confirm_sub":   "Only removes local config; the server itself is untouched",
+
+        "dlg_new_session":   "New tmux session — %s",
+        "dlg_create_conn":   "Create & connect",
+        "dlg_sess_name":     "Session name",
+        "dlg_startup":       "Startup command (optional)",
+        "dlg_template":      "Template",
+        "dlg_no_tpl":        "(no template)",
+        "dlg_tpl_label":     "%s: %s",
+        "dlg_save_tpl":      "Also save as template for next time",
+
+        "dlg_exec_cmd":      "Run command — open live-output tab",
+        "dlg_open":          "Open",
+        "dlg_target":        "Target server",
+        "dlg_srv_with_via":  "%s  (%s%s)",
+        "via_suffix":        " via %s",
+        "dlg_cmd":           "Command (runs on remote, q / Ctrl+C to stop)",
+        "dlg_cmd_ph":        "top / htop / tail -f /var/log/syslog / df -h ...",
+        "dlg_full_shell":    "Run in full login shell (bash -lic: sources ~/.profile + ~/.bashrc; needed for custom commands / PATH exports)",
+        "missing_vte":       "⚠ VTE terminal library missing — cannot open command terminal (install gir1.2-vte-2.91)",
+        "no_server":         "⚠ Add a server first",
+        "term_started":      "📟 Started on %s (%s): %s",
+        "term_close_tip":    "Close (terminate command)",
+        "term_done_suffix":  "  ✓ finished",
+        "term_exit_msg":     "\r\n\x1b[90m[command finished, exit=%d] close this tab or click ➕ for a new command\x1b[0m\r\n",
+        "term_spawn_fail":   "\r\n⚠ spawn failed: %s\r\n",
+
+        "menu_open_ssh":     "🔌 Open SSH",
+        "menu_sftp_term":    "📂 SFTP terminal",
+        "menu_sftp_fm":      "📁 SFTP file manager",
+        "menu_exec_cmd":     "📟 Run command (live output)",
+        "menu_edit":         "✏️ Edit",
+        "menu_copy_ssh":     "📋 Copy ssh command",
+        "menu_delete":       "🗑 Delete",
+        "menu_connect":      "🔌 Connect",
+        "menu_copy_cmd":     "📋 Copy command",
+        "menu_kill":         "💀 Kill session",
+
+        "load_ok":           "load ok",
+        "load_light":        "load light",
+        "load_med":          "load medium",
+        "load_high":         "load high",
+        "load_crit":         "load critical",
+        "mem_pct":           "mem",
+        "disk_pct":          "disk",
+        "up_label":          "up ",
+        "up_min":            "%d min",
+        "up_hm":             "%d h %d m",
+        "up_dh":             "%d d %d h",
+        "rel_now":           "just now",
+        "rel_min":           "%d min ago",
+        "rel_hr":            "%d h ago",
+        "rel_day":           "%d d ago",
+
+        "disconnect_prompt": "Disconnected, press Enter to close the window...",
+    },
+}
+
+LANG = "zh"   # 全局当前语言; main() 启动时按 prefs / 环境重置
+
+
+def detect_lang(cfg):
+    """从 prefs > 环境变量 LANG 推断界面语言。"""
+    pref = (cfg.get("prefs", {}) or {}).get("lang")
+    if pref in LANGS:
+        return pref
+    env = os.environ.get("LANG", "") or os.environ.get("LC_ALL", "")
+    return "en" if env.lower().startswith("en") else "zh"
+
+
+def t(key, *args):
+    """按当前 LANG 取词条。缺失则返回 key（调试时立刻可见）。"""
+    s = LANGS.get(LANG, {}).get(key, key)
+    try:
+        return s % args if args else s
+    except Exception:
+        return s
+
+
 # ---------------- 配置 ----------------
 
 def load_config():
@@ -71,8 +409,13 @@ def load_config():
                 data = json.load(f)
             if isinstance(data, dict) and "servers" in data:
                 if "prefs" not in data:
-                    data["prefs"] = {"tab": True}
+                    data["prefs"] = {"tab": True, "lang": detect_lang({})}
                     save_config(data)
+                else:
+                    data["prefs"].setdefault("lang", detect_lang(data))
+                    if "tab" not in data["prefs"]:
+                        data["prefs"]["tab"] = True
+                        save_config(data)
                 return data
             if isinstance(data, dict) and "sessions" in data:   # v1 → v2 迁移
                 servers = {}
@@ -89,12 +432,12 @@ def load_config():
                                         "templates": []}
                     if s.get("startup", "").strip():
                         servers[key]["templates"].append({"name": s["name"], "startup": s["startup"]})
-                cfg = {"prefs": {"tab": True}, "servers": list(servers.values())}
+                cfg = {"prefs": {"tab": True, "lang": detect_lang({})}, "servers": list(servers.values())}
                 save_config(cfg)
                 return cfg
         except Exception:
             pass
-    cfg = {"prefs": {"tab": True}, "servers": []}
+    cfg = {"prefs": {"tab": True, "lang": detect_lang({})}, "servers": []}
     save_config(cfg)
     return cfg
 
@@ -250,14 +593,14 @@ def attach_shell_string(srv, session, startup="", cfg=None):
     cmd = ("%sssh -t %s -p %d %s %s %s"
            % (_env_prefix(srv, cfg), " ".join(_jump_args(srv, cfg)), port_of(srv),
               _ssh_opts(srv), shlex.quote(target_of(srv)), shlex.quote(remote)))
-    return cmd + '; echo; read -p "已断开，回车关闭窗口..."; exit'
+    return cmd + ('; echo; read -p "%s"; exit' % t("disconnect_prompt"))
 
 
 def ssh_login_shell_string(srv, cfg=None):
     cmd = ("%sssh -t %s -p %d %s %s"
            % (_env_prefix(srv, cfg), " ".join(_jump_args(srv, cfg)), port_of(srv),
               _ssh_opts(srv), shlex.quote(target_of(srv))))
-    return cmd + '; echo; read -p "已断开，回车关闭窗口..."; exit'
+    return cmd + ('; echo; read -p "%s"; exit' % t("disconnect_prompt"))
 
 
 def copy_attach_cmd(srv, session, cfg=None):
@@ -314,7 +657,7 @@ def sftp_cli_args(srv, cfg=None):
 def sftp_shell_string(srv, cfg=None):
     """ptyxis 标签页里运行的 sftp 终端命令（复用 askpass 自动密码，支持 -J 跳板）。"""
     return (sftp_cli_args(srv, cfg)
-            + '; echo; read -p "已断开，回车关闭窗口..."; exit')
+            + ('; echo; read -p "%s"; exit' % t("disconnect_prompt")))
 
 
 def ptyxis_argv(shell_string, title, tab=True):
@@ -449,24 +792,24 @@ def load_status(info):
     """按 load/核 比给出 (颜色class, 文字)。"""
     pct = info.get("load_pct")
     if pct is None:
-        return "load-ok", "负荷正常"
+        return "load-ok", t("load_ok")
     if pct < 60:
-        return "load-ok", "负荷轻"
+        return "load-ok", t("load_light")
     if pct < 100:
-        return "load-warn", "负荷中"
+        return "load-warn", t("load_med")
     if pct < 200:
-        return "load-high", "负荷高"
-    return "load-crit", "负荷过载"
+        return "load-high", t("load_high")
+    return "load-crit", t("load_crit")
 
 
 def fmt_up(mins):
     if mins is None:
         return "?"
     if mins < 60:
-        return "%d 分钟" % mins
+        return t("up_min", mins)
     if mins < 60 * 24:
-        return "%d 小时 %d 分" % (mins // 60, mins % 60)
-    return "%d 天 %d 小时" % (mins // 1440, (mins % 1440) // 60)
+        return t("up_hm", mins // 60, mins % 60)
+    return t("up_dh", mins // 1440, (mins % 1440) // 60)
 
 
 def fmt_kbps(v):
@@ -514,7 +857,7 @@ def ping_markup(ms):
 
 def probe_load(srv, cfg=None):
     """ssh 探测服务器负荷；返回 (ok, info_dict)。info 含 rtt_ms(ssh 往返, 连通性指标)。
-    失败时 info 含 msg。"""
+    失败时 info 含 msg（已是译文）。"""
     # 1) ping: 一次轻量 ssh 往返，测整条链路(含跳板)延迟
     rtt = None
     try:
@@ -528,22 +871,22 @@ def probe_load(srv, cfg=None):
     try:
         r = run_ssh_quiet(srv, _LOAD_CMD, cfg)
     except subprocess.TimeoutExpired:
-        return False, {"msg": "SSH 超时", "rtt_ms": rtt}
+        return False, {"msg": t("msg_ssh_timeout"), "rtt_ms": rtt}
     if r.returncode != 0:
-        return False, {"msg": "SSH 失败", "rtt_ms": rtt}
+        return False, {"msg": t("msg_ssh_error"), "rtt_ms": rtt}
     info = parse_load_output(r.stdout)
     info["rtt_ms"] = rtt
     if not info.get("ok"):
-        return False, {"msg": "输出异常", "raw": r.stdout[:200], "rtt_ms": rtt}
+        return False, {"msg": t("msg_bad_output"), "raw": r.stdout[:200], "rtt_ms": rtt}
     return True, info
 
 
 # ---------------- 探测 ----------------
 
 def parse_tmux_ls(r):
-    """解析 ssh 探测结果 → (status, sessions, msg)。sessions: [{name, windows, created}]"""
+    """解析 ssh 探测结果 → (status, sessions, msg)。msg 是译文。"""
     if r.returncode != 0:
-        return "down", [], "SSH 失败(检查地址/用户名/密钥)"
+        return "down", [], t("msg_ssh_fail")
     out = r.stdout.splitlines()
     sessions = []
     for line in out:
@@ -560,8 +903,8 @@ def parse_tmux_ls(r):
         sessions.sort(key=lambda x: -x["created"])
         return "ok", sessions, ""
     if "not found" in r.stderr.lower():
-        return "notmux", [], "服务器上未安装 tmux"
-    return "empty", [], "tmux 已装，但没有任何会话"
+        return "notmux", [], t("msg_no_tmux")
+    return "empty", [], t("msg_empty")
 
 
 def scan_server(srv, seq, done, cfg=None):
@@ -574,7 +917,7 @@ def scan_server(srv, seq, done, cfg=None):
             r = run_ssh_quiet(srv, remote, cfg)
         except Exception:
             GLib.idle_add(done, {"srv": srv["name"], "seq": seq,
-                                 "status": "down", "sessions": [], "msg": "服务器不可达"})
+                                 "status": "down", "sessions": [], "msg": t("msg_unreachable")})
             return
         st, sessions, msg = parse_tmux_ls(r)
         GLib.idle_add(done, {"srv": srv["name"], "seq": seq, "status": st,
@@ -587,23 +930,31 @@ def rel_time(ts):
         return "?"
     d = time.time() - ts
     if d < 60:
-        return "刚刚"
+        return t("rel_now")
     if d < 3600:
-        return "%d分钟前" % int(d // 60)
+        return t("rel_min", int(d // 60))
     if d < 86400:
-        return "%d小时前" % int(d // 3600)
-    return "%d天前" % int(d // 86400)
+        return t("rel_hr", int(d // 3600))
+    return t("rel_day", int(d // 86400))
 
 
 # ---------------- GUI ----------------
 
 class MainWindow(Gtk.Window):
     SRV_DOT = {"ok": "dot-ok", "empty": "dot-empty", "down": "dot-down", "notmux": "dot-notmux"}
-    SRV_TEXT = {"ok": "● 可连接，tmux 运行中", "empty": "○ 可连接，无 tmux 会话",
-                "down": "✗ 不可达", "notmux": "⚠ 未安装 tmux"}
+
+    @staticmethod
+    def srv_status_text(st):
+        return {"ok": t("srv_status_ok"),
+                "empty": t("srv_status_empty"),
+                "down": t("srv_status_down"),
+                "notmux": t("srv_status_notmux")}.get(st, "")
 
     def __init__(self):
-        super().__init__(title="🔗 Tmux 连接器")
+        global LANG
+        self.cfg = load_config()
+        LANG = detect_lang(self.cfg)
+        super().__init__(title=t("win_title"))
         self.set_default_size(900, 560)
         # WM_CLASS 必须与 .desktop 的 StartupWMClass 一致，GNOME dock 才显示正确图标
         with warnings.catch_warnings():
@@ -615,7 +966,6 @@ class MainWindow(Gtk.Window):
                 self.set_icon_from_file(icon)
             except Exception:
                 pass
-        self.cfg = load_config()
         self.scan_seq = 0
         self.sel_srv = None            # 选中的服务器名
         self.srv_status = {}           # srv name -> status
@@ -630,29 +980,34 @@ class MainWindow(Gtk.Window):
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
-        hb = Gtk.HeaderBar(show_close_button=True)
-        hb.set_title("🔗 Tmux 连接器")
-        hb.set_subtitle("%d 台服务器 · 自动探测 tmux" % len(self.cfg["servers"]))
-        self.set_titlebar(hb)
+        self.hb = Gtk.HeaderBar(show_close_button=True)
+        self.hb.set_title(t("win_title"))
+        self.hb.set_subtitle(t("subtitle", len(self.cfg["servers"])))
+        self.set_titlebar(self.hb)
 
-        b_add = Gtk.Button(label="➕ 添加服务器")
+        b_add = Gtk.Button(label=t("add_server"))
         b_add.connect("clicked", self.on_add_server)
-        hb.pack_start(b_add)
+        self.hb.pack_start(b_add)
 
-        self.tab_btn = Gtk.ToggleButton(label="📑 标签页模式")
+        self.lang_btn = Gtk.Button(label="🌐 " + t("lang_name"))
+        self.lang_btn.set_tooltip_text(t("lang_toggle_tip"))
+        self.lang_btn.connect("clicked", self.on_lang_toggle)
+        self.hb.pack_end(self.lang_btn)
+
+        self.tab_btn = Gtk.ToggleButton(label=t("tab_mode"))
         self.tab_btn.set_active(bool(self.cfg.get("prefs", {}).get("tab", True)))
-        self.tab_btn.set_tooltip_text("连接时在现有 ptyxis 窗口开新标签页；关闭则每次开新窗口")
+        self.tab_btn.set_tooltip_text(t("tab_mode_tip"))
         self.tab_btn.connect("toggled", self.on_tab_toggled)
-        hb.pack_end(self.tab_btn)
+        self.hb.pack_end(self.tab_btn)
 
         # ---- 左: 服务器卡片（列表+负荷看板合并，点选即显示 tmux 清单）----
         left_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        left_label = Gtk.Label(label="🖥 服务器 · 负荷", xalign=0)
-        left_label.get_style_context().add_class("dim-label")
-        left_bar.pack_start(left_label, True, True, 0)
+        self.left_label = Gtk.Label(label=t("left_title"), xalign=0)
+        self.left_label.get_style_context().add_class("dim-label")
+        left_bar.pack_start(self.left_label, True, True, 0)
         self.b_load_all = Gtk.Button(label="🔄")
         self.b_load_all.set_relief(Gtk.ReliefStyle.NONE)
-        self.b_load_all.set_tooltip_text("手动刷新全部服务器负荷")
+        self.b_load_all.set_tooltip_text(t("load_all_tip"))
         self.b_load_all.connect("clicked", lambda *a: self.refresh_loads(force=True))
         left_bar.pack_end(self.b_load_all, False, False, 0)
         self.srv_list = Gtk.ListBox()
@@ -669,18 +1024,18 @@ class MainWindow(Gtk.Window):
         left.set_size_request(300, -1)
 
         # ---- 右: 探测到的会话 ----
-        self.right_info = Gtk.Label(label="请在左侧选择服务器", xalign=0)
+        self.right_info = Gtk.Label(label=t("right_hint_empty"), xalign=0)
         self.right_info.set_margin_top(6)
         self.right_info.set_margin_bottom(2)
         right_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        self.b_refresh = Gtk.Button(label="🔄 重新探测")
+        self.b_refresh = Gtk.Button(label=t("rescan"))
         self.b_refresh.connect("clicked", self.on_rescan)
         self.b_refresh.set_sensitive(False)
-        self.b_term = Gtk.Button(label="📟 执行命令")
-        self.b_term.set_tooltip_text("在右侧新开终端 tab 动态显示命令输出 (top / mytop / tail -f …)")
+        self.b_term = Gtk.Button(label=t("exec_cmd"))
+        self.b_term.set_tooltip_text(t("exec_cmd_tip"))
         self.b_term.connect("clicked", self.on_new_term)
         self.b_term.set_sensitive(False)
-        self.b_new = Gtk.Button(label="➕ 新建 tmux 会话")
+        self.b_new = Gtk.Button(label=t("new_session"))
         self.b_new.connect("clicked", self.on_new_session)
         self.b_new.set_sensitive(False)
         right_bar.pack_start(self.right_info, True, True, 0)
@@ -709,14 +1064,16 @@ class MainWindow(Gtk.Window):
         # ---- 右: Notebook — 会话清单与各命令终端平级可切换，终端 tab 占满整个右侧高度 ----
         self.nb = Gtk.Notebook()
         self.nb.set_show_border(False)
-        self.nb.append_page(right, Gtk.Label(label="📋 会话"))
+        self.nb_tab_sessions_label = Gtk.Label(label=t("notebook_sessions"))
+        self.nb.append_page(right, self.nb_tab_sessions_label)
         self.nb.set_tab_reorderable(right, False)
+        self._sessions_page_widget = right   # 保存以便 _apply_texts 时重置标签
 
         paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         paned.pack1(left, False, False)
         paned.pack2(self.nb, True, True)
 
-        self.status = Gtk.Label(label="就绪 · 状态探测走 ssh 密钥登录", xalign=0)
+        self.status = Gtk.Label(label=t("status_ready"), xalign=0)
         self.status.set_margin_top(4)
         self.status.set_margin_bottom(4)
         self.status.set_margin_start(8)
@@ -732,6 +1089,46 @@ class MainWindow(Gtk.Window):
         GLib.timeout_add(LOAD_REFRESH_MS, self._auto_load)
         GLib.idle_add(self._initial_select)
         self.refresh_loads(first=True)
+
+    # ---------- i18n ----------
+
+    def on_lang_toggle(self, *a):
+        global LANG
+        LANG = "en" if LANG == "zh" else "zh"
+        self.cfg.setdefault("prefs", {})["lang"] = LANG
+        save_config(self.cfg)
+        self._apply_texts()
+
+    def _apply_texts(self):
+        """语言切换后重绘所有静态文本。会话卡片/服务器卡片是动态生成的，
+        直接 reload_servers() 重画最干净; 其余按钮/标签就地 set_text。"""
+        self.set_title(t("win_title"))
+        self.hb.set_title(t("win_title"))
+        self.hb.set_subtitle(t("subtitle", len(self.cfg["servers"])))
+        self.lang_btn.set_label("🌐 " + t("lang_name"))
+        self.lang_btn.set_tooltip_text(t("lang_toggle_tip"))
+        self.tab_btn.set_label(t("tab_mode"))
+        self.tab_btn.set_tooltip_text(t("tab_mode_tip"))
+        self.left_label.set_text(t("left_title"))
+        self.b_load_all.set_tooltip_text(t("load_all_tip"))
+        self.right_info.set_text(t("right_hint_empty"))
+        self.b_refresh.set_label(t("rescan"))
+        self.b_term.set_label(t("exec_cmd"))
+        self.b_term.set_tooltip_text(t("exec_cmd_tip"))
+        self.b_new.set_label(t("new_session"))
+        self.nb_tab_sessions_label.set_text(t("notebook_sessions"))
+        self.status.set_text(t("status_ready"))
+        # 重画菜单 + 服务器卡片 (卡片里的 tooltip/状态文本需要重生成)
+        self.build_menus()
+        self.reload_servers()
+        # 重新触发当前选中服务器的探测, 让状态文字 / 右栏 hint 都换成新语言
+        self.sel_srv = None
+        self.right_info.set_text(t("right_hint_empty"))
+        self.right_hint.set_text("")
+        for child in self.sess_flow.get_children():
+            self.sess_flow.remove(child)
+        self.sess_widgets = {}
+        self._initial_select()
 
     # ---------- 左列: 服务器 ----------
 
@@ -770,7 +1167,7 @@ class MainWindow(Gtk.Window):
         if w:
             val_l, bar, info_l = w[2], w[3], w[4]
             val_l.set_text("…")
-            info_l.set_markup('<span size="small">📊 探测中…</span>')
+            info_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(t("srv_loading")))
 
         def run():
             try:
@@ -796,8 +1193,8 @@ class MainWindow(Gtk.Window):
             bar.set_fraction(0.0)
             for cls in ("bar-ok", "bar-warn", "bar-high", "bar-crit"):
                 bar.get_style_context().remove_class(cls)
-            val_l.set_text("⚠ 离线")
-            info_l.set_markup('<span size="small">📊 不可达</span>')
+            val_l.set_text(t("srv_offline"))
+            info_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(t("srv_unreachable")))
             gpu_l.set_text("")
             net_l.set_text("")
             ping_l.set_markup(ping_markup(info.get("rtt_ms")))
@@ -813,12 +1210,13 @@ class MainWindow(Gtk.Window):
         bar.get_style_context().remove_class("bar-crit")
         bar.get_style_context().add_class("bar-" + cls.split("-")[1])
         cores = info.get("cores")
+        cores_str = (" (/%d)" % cores) if cores else ""
         val_l.set_markup('<span size="large">%s</span>'
-                         % GLib.markup_escape_text("%.1f" % (pct or 0)
-                                                   + (" (/%d核)" % cores if cores else "")))
-        mem = ("%d%% 内存" % (info["mem_used"] * 100.0 / info["mem_total"])) if info.get("mem_total") else ""
-        disk = ("%d%% 磁盘" % (info["disk_used"] * 100.0 / info["disk_total"])) if info.get("disk_total") else ""
-        parts = [label, "load %s" % info.get("load1", "?"), mem, disk, "运行 %s" % fmt_up(info.get("up_min"))]
+                         % GLib.markup_escape_text("%.1f%s" % (pct or 0, cores_str)))
+        mem = ("%d%% %s" % (info["mem_used"] * 100.0 / info["mem_total"], t("mem_pct"))) if info.get("mem_total") else ""
+        disk = ("%d%% %s" % (info["disk_used"] * 100.0 / info["disk_total"], t("disk_pct"))) if info.get("disk_total") else ""
+        up_label = t("up_label")
+        parts = [label, "load %s" % info.get("load1", "?"), mem, disk, up_label + fmt_up(info.get("up_min"))]
         text = " · ".join(p for p in parts if p)
         info_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(text))
         gpu_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(gpu_text(info)))
@@ -838,7 +1236,7 @@ class MainWindow(Gtk.Window):
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
         dot = Gtk.Label(label="●")
         dot.get_style_context().add_class("dot-empty")
-        dot.set_tooltip_text("尚未探测")
+        dot.set_tooltip_text(t("srv_not_probed"))
         name_l = Gtk.Label(label="", xalign=0)
         name_l.get_style_context().add_class("load-name")
         name_l.set_markup("<b>%s</b>" % GLib.markup_escape_text(srv["name"]))
@@ -848,13 +1246,13 @@ class MainWindow(Gtk.Window):
         val_l.get_style_context().add_class("load-mut")
         top.pack_end(val_l, False, False, 0)
         ping_l = Gtk.Label(label="", xalign=1)
-        ping_l.set_tooltip_text("ssh 往返延迟(含跳板链路)")
+        ping_l.set_tooltip_text(t("ping_tip"))
         top.pack_end(ping_l, False, False, 0)
         via = jump_display(srv, self.cfg)
         if via:
             vl = Gtk.Label(label="↪", xalign=0)
             vl.get_style_context().add_class("load-mut")
-            vl.set_tooltip_text("经网关: %s" % via)
+            vl.set_tooltip_text(t("via_jump", via))
             top.pack_end(vl, False, False, 0)
 
         bar = Gtk.ProgressBar()
@@ -863,7 +1261,7 @@ class MainWindow(Gtk.Window):
 
         info_l = Gtk.Label(label="", xalign=0)
         info_l.get_style_context().add_class("load-mut")
-        info_l.set_markup('<span size="small">📊 探测中…</span>')
+        info_l.set_markup('<span size="small">%s</span>' % GLib.markup_escape_text(t("srv_loading")))
         gpu_l = Gtk.Label(label="", xalign=0)
         gpu_l.get_style_context().add_class("load-mut")
         net_l = Gtk.Label(label="", xalign=0)
@@ -916,7 +1314,7 @@ class MainWindow(Gtk.Window):
     def _scan(self, srv):
         self.scan_seq += 1
         seq = self.scan_seq
-        self.right_hint.set_text("🔄 正在探测 %s 上的 tmux 实例..." % srv["name"])
+        self.right_hint.set_text(t("scanning", srv["name"]))
         scan_server(srv, seq, self.on_scan_result, self.cfg)
 
     def on_rescan(self, *a):
@@ -940,7 +1338,7 @@ class MainWindow(Gtk.Window):
             for cls in self.SRV_DOT.values():
                 dot.get_style_context().remove_class(cls)
             dot.get_style_context().add_class(self.SRV_DOT[st])
-            dot.set_tooltip_text(self.SRV_TEXT[st])
+            dot.set_tooltip_text(self.srv_status_text(st))
         if srv_name != self.sel_srv:
             return
         self._fill_sessions(srv_name, st, result["sessions"], result["msg"])
@@ -953,26 +1351,26 @@ class MainWindow(Gtk.Window):
             for sess in sessions:
                 self.sess_flow.add(self._make_sess_row(sess))
             self.sess_flow.show_all()
-            self.right_hint.set_text("双击会话即连接 · 右键更多操作 · 每 30 秒自动刷新")
-            self.status.set_text("🔍 %s: 探测到 %d 个 tmux 会话" % (srv_name, len(sessions)))
+            self.right_hint.set_text(t("sess_hint"))
+            self.status.set_text(t("scan_count", srv_name, len(sessions)))
         else:
             self.sess_flow.show_all()
-            self.right_hint.set_text("ℹ️ %s — %s。点「➕ 新建 tmux 会话」创建。" % (msg, srv_name))
-            self.status.set_text("🔍 %s: %s" % (srv_name, msg))
+            self.right_hint.set_text(t("sess_hint_fail", msg, srv_name))
+            self.status.set_text(t("scan_msg", srv_name, msg))
 
     def _make_sess_row(self, sess):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         box.get_style_context().add_class("sess-card")
         dot = Gtk.Label(label="●")
         dot.get_style_context().add_class("dot-ok")
-        dot.set_tooltip_text("运行中")
+        dot.set_tooltip_text(t("sess_running_tip"))
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         tl = Gtk.Label(label="", xalign=0)
         tl.set_markup("<b>%s</b>" % GLib.markup_escape_text(sess["name"]))
         sl = Gtk.Label(label="", xalign=0)
         sl.set_markup('<span size="small" fgcolor="#7f8c8d">%s</span>'
-                      % GLib.markup_escape_text("%s 个窗口 · 创建于 %s"
-                                                % (sess["windows"], rel_time(sess["created"]))))
+                      % GLib.markup_escape_text(t("sess_meta",
+                                                  sess["windows"], rel_time(sess["created"]))))
         v.pack_start(tl, False, False, 0)
         v.pack_start(sl, False, False, 0)
         box.pack_start(dot, False, False, 0)
@@ -1006,7 +1404,8 @@ class MainWindow(Gtk.Window):
     def on_tab_toggled(self, btn):
         self.cfg.setdefault("prefs", {})["tab"] = btn.get_active()
         save_config(self.cfg)
-        self.status.set_text("📑 标签页模式: %s" % ("开" if btn.get_active() else "关（新窗口）"))
+        self.status.set_text(t("tab_mode_status",
+                               t("tab_mode_on") if btn.get_active() else t("tab_mode_off")))
 
     def _connect(self, sess):
         srv = self.srv_by_name(self.sel_srv)
@@ -1015,23 +1414,23 @@ class MainWindow(Gtk.Window):
         argv = launch_terminal(attach_shell_string(srv, sess["name"], cfg=self.cfg),
                                "%s@%s" % (sess["name"], srv["host"]), tab=self._tab_mode())
         if argv is None:
-            self.status.set_text("⚠ 未找到终端模拟器，请手动执行: " + copy_attach_cmd(srv, sess["name"], self.cfg))
+            self.status.set_text(t("no_terminal", copy_attach_cmd(srv, sess["name"], self.cfg)))
         else:
-            self.status.set_text("🔌 正在打开终端连接 %s → tmux %s ..." % (srv["name"], sess["name"]))
+            self.status.set_text(t("opening_tmux", srv["name"], sess["name"]))
 
     def on_connect_ssh(self, *a):
         srv = self.srv_by_name(self.sel_srv)
         if srv:
             launch_terminal(ssh_login_shell_string(srv, self.cfg), "ssh: %s" % srv["name"],
                             tab=self._tab_mode())
-            self.status.set_text("🔌 正在打开 SSH 终端 %s ..." % srv["name"])
+            self.status.set_text(t("opening_ssh", srv["name"]))
 
     def on_sftp_terminal(self, *a):
         srv = self.srv_by_name(self.sel_srv)
         if srv:
             launch_terminal(sftp_shell_string(srv, self.cfg), "sftp: %s" % srv["name"],
                             tab=self._tab_mode())
-            self.status.set_text("📂 正在打开 SFTP 终端 %s ..." % srv["name"])
+            self.status.set_text(t("opening_sftp_term", srv["name"]))
 
     def on_sftp_fm(self, *a):
         srv = self.srv_by_name(self.sel_srv)
@@ -1041,27 +1440,28 @@ class MainWindow(Gtk.Window):
         launcher = shutil.which("gio") or shutil.which("nautilus") or shutil.which("nemo") \
             or shutil.which("thunar") or shutil.which("dolphin")
         if not launcher:
-            self.status.set_text("⚠ 未找到文件管理器/gio，请手动打开 %s" % url)
+            self.status.set_text(t("no_fm", url))
             return
         if os.path.basename(launcher) == "gio":
             subprocess.Popen([launcher, "open", url])
         else:
             subprocess.Popen([launcher, url])
-        self.status.set_text("📁 已请求打开 %s" % url)
+        self.status.set_text(t("opened_sftp", url))
 
     def on_copy_sess_cmd(self, *a):
         sess = self._selected_sess()
         srv = self.srv_by_name(self.sel_srv)
         if sess and srv:
-            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(copy_attach_cmd(srv, sess["name"], self.cfg), -1)
-            self.status.set_text("📋 已复制: " + copy_attach_cmd(srv, sess["name"], self.cfg))
+            cmd = copy_attach_cmd(srv, sess["name"], self.cfg)
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(cmd, -1)
+            self.status.set_text(t("copied_connect", cmd))
 
     def on_copy_ssh_cmd(self, *a):
         srv = self.srv_by_name(self.sel_srv)
         if srv:
             cmd = ssh_login_shell_string(srv, self.cfg).split("; echo")[0]
             Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(cmd, -1)
-            self.status.set_text("📋 已复制 ssh 登录命令")
+            self.status.set_text(t("copied_ssh"))
 
     def on_kill_session(self, *a):
         sess = self._selected_sess()
@@ -1071,8 +1471,8 @@ class MainWindow(Gtk.Window):
         md = Gtk.MessageDialog(transient_for=self, modal=True,
                                message_type=Gtk.MessageType.QUESTION,
                                buttons=Gtk.ButtonsType.YES_NO,
-                               text="终止 tmux 会话「%s」?" % sess["name"],
-                               secondary_text="执行 tmux kill-session -t %s，会话内所有进程都会被结束" % sess["name"])
+                               text=t("kill_confirm", sess["name"]),
+                               secondary_text=t("kill_confirm_sub", sess["name"]))
         resp = md.run()
         md.destroy()
         if resp != Gtk.ResponseType.YES:
@@ -1080,18 +1480,18 @@ class MainWindow(Gtk.Window):
         try:
             r = run_ssh_quiet(srv, "tmux kill-session -t %s" % shlex.quote(sess["name"]), self.cfg)
             if r.returncode == 0:
-                self.status.set_text("💀 已终止会话 %s" % sess["name"])
+                self.status.set_text(t("killed", sess["name"]))
             else:
-                self.status.set_text("⚠ 终止失败: %s" % r.stderr.strip()[:80])
+                self.status.set_text(t("kill_fail", r.stderr.strip()[:80]))
         except Exception as e:
-            self.status.set_text("⚠ 终止失败: %s" % e)
+            self.status.set_text(t("kill_fail", e))
         self._scan(srv)
 
     def _selected_sess(self):
         sel = self.sess_flow.get_selected_children()
         child = sel[0] if sel else None
         if child is None:
-            self.status.set_text("⚠ 请先在右侧选中一个 tmux 会话")
+            self.status.set_text(t("select_sess_first"))
             return None
         return self.sess_widgets.get(child.get_child())
 
@@ -1102,25 +1502,25 @@ class MainWindow(Gtk.Window):
         if not d:
             return
         if self.srv_by_name(d["name"]):
-            self.status.set_text("⚠ 服务器名称「%s」已存在" % d["name"])
+            self.status.set_text(t("dup_server", d["name"]))
             return
         d["templates"] = []
         self.cfg["servers"].append(d)
         save_config(self.cfg)
         self.reload_servers()
         self._select_srv(d["name"])
-        self.status.set_text("➕ 已添加服务器「%s」" % d["name"])
+        self.status.set_text(t("added_server", d["name"]))
 
     def on_edit_server(self, *a):
         srv = self.srv_by_name(self.sel_srv) if self.sel_srv else None
         if not srv:
-            self.status.set_text("⚠ 请先选中一个服务器")
+            self.status.set_text(t("select_server"))
             return
         d = self.server_dialog(srv)
         if not d:
             return
         if d["name"] != srv["name"] and self.srv_by_name(d["name"]):
-            self.status.set_text("⚠ 名称「%s」已存在" % d["name"])
+            self.status.set_text(t("dup_name", d["name"]))
             return
         idx = self.cfg["servers"].index(srv)
         d["templates"] = srv.get("templates", [])
@@ -1128,18 +1528,18 @@ class MainWindow(Gtk.Window):
         save_config(self.cfg)
         self.reload_servers()
         self._select_srv(d["name"])
-        self.status.set_text("✏️ 已保存服务器「%s」" % d["name"])
+        self.status.set_text(t("saved_server", d["name"]))
 
     def on_delete_server(self, *a):
         srv = self.srv_by_name(self.sel_srv) if self.sel_srv else None
         if not srv:
-            self.status.set_text("⚠ 请先选中一个服务器")
+            self.status.set_text(t("select_server"))
             return
         md = Gtk.MessageDialog(transient_for=self, modal=True,
                                message_type=Gtk.MessageType.QUESTION,
                                buttons=Gtk.ButtonsType.YES_NO,
-                               text="删除服务器「%s」?" % srv["name"],
-                               secondary_text="只删本地配置，不影响服务器本身")
+                               text=t("del_confirm", srv["name"]),
+                               secondary_text=t("del_confirm_sub"))
         resp = md.run()
         md.destroy()
         if resp != Gtk.ResponseType.YES:
@@ -1149,12 +1549,12 @@ class MainWindow(Gtk.Window):
         self.sel_srv = None
         self.reload_servers()
         self._initial_select()
-        self.status.set_text("🗑 已删除服务器「%s」" % srv["name"])
+        self.status.set_text(t("deleted_server", srv["name"]))
 
     def server_dialog(self, srv=None):
-        d = Gtk.Dialog(title="编辑服务器" if srv else "添加服务器",
+        d = Gtk.Dialog(title=t("dlg_edit_server") if srv else t("dlg_add_server"),
                        transient_for=self, modal=True)
-        d.add_buttons("取消", Gtk.ResponseType.CANCEL, "保存", Gtk.ResponseType.OK)
+        d.add_buttons(t("dlg_cancel"), Gtk.ResponseType.CANCEL, t("dlg_save"), Gtk.ResponseType.OK)
         grid = Gtk.Grid(column_spacing=8, row_spacing=6, margin=14)
         d.get_content_area().add(grid)
 
@@ -1165,34 +1565,34 @@ class MainWindow(Gtk.Window):
             grid.attach(e, 1, y, 1, 1)
             return e
 
-        e_name = row(0, "显示名称", srv["name"] if srv else "")
-        e_host = row(1, "服务器地址", srv["host"] if srv else "")
-        e_user = row(2, "用户名(空=本机用户)", srv.get("user", "") if srv else "")
-        e_port = row(3, "端口", str(port_of(srv)) if srv else "22")
+        e_name = row(0, t("dlg_field_name"), srv["name"] if srv else "")
+        e_host = row(1, t("dlg_field_host"), srv["host"] if srv else "")
+        e_user = row(2, t("dlg_field_user"), srv.get("user", "") if srv else "")
+        e_port = row(3, t("dlg_field_port"), str(port_of(srv)) if srv else "22")
 
-        lb4 = Gtk.Label(label="密码(可选)", xalign=0)
+        lb4 = Gtk.Label(label=t("dlg_field_pass"), xalign=0)
         grid.attach(lb4, 0, 4, 1, 1)
         e_pass = Gtk.Entry()
         e_pass.set_visibility(False)
-        e_pass.set_placeholder_text("留空 = 使用 SSH 密钥")
+        e_pass.set_placeholder_text(t("dlg_pass_ph"))
         e_pass.set_text(srv.get("password", "") if srv else "")
         grid.attach(e_pass, 1, 4, 1, 1)
-        cb_show = Gtk.CheckButton(label="显示")
+        cb_show = Gtk.CheckButton(label=t("dlg_show"))
         cb_show.connect("toggled", lambda b: e_pass.set_visibility(b.get_active()))
         grid.attach(cb_show, 2, 4, 1, 1)
 
         # 网关(跳板): 一层 SSH 嵌套穿梭。列表来自当前其他服务器
-        lb5 = Gtk.Label(label="网关(可选, 跳板)", xalign=0)
+        lb5 = Gtk.Label(label=t("dlg_field_jump"), xalign=0)
         grid.attach(lb5, 0, 5, 1, 1)
         e_jump = Gtk.ComboBoxText()
-        e_jump.append("", "（无 · 直连）")
+        e_jump.append("", t("dlg_jump_none"))
         my_name = srv["name"] if srv else None
         jump_names = []   # combo 下标(≥1) → 服务器名；保存按下标取，绝不反解析显示文本
         for s in self.cfg["servers"]:
             if s["name"] == my_name:
                 continue
             jump_names.append(s["name"])
-            e_jump.append(s["name"], "↪ %s (%s)" % (s["name"], s["host"]))
+            e_jump.append(s["name"], t("dlg_jump_via", s["name"], s["host"]))
         cur = (srv or {}).get("jump", "").lstrip("↪").strip()
         for i, sname in enumerate(jump_names, start=1):
             if sname == cur:
@@ -1227,20 +1627,20 @@ class MainWindow(Gtk.Window):
     def on_new_session(self, *a):
         srv = self.srv_by_name(self.sel_srv) if self.sel_srv else None
         if not srv:
-            self.status.set_text("⚠ 请先选中一个服务器")
+            self.status.set_text(t("select_server"))
             return
-        d = Gtk.Dialog(title="新建 tmux 会话 — %s" % srv["name"],
+        d = Gtk.Dialog(title=t("dlg_new_session", srv["name"]),
                        transient_for=self, modal=True)
-        d.add_buttons("取消", Gtk.ResponseType.CANCEL, "创建并连接", Gtk.ResponseType.OK)
+        d.add_buttons(t("dlg_cancel"), Gtk.ResponseType.CANCEL, t("dlg_create_conn"), Gtk.ResponseType.OK)
         grid = Gtk.Grid(column_spacing=8, row_spacing=6, margin=14)
         d.get_content_area().add(grid)
 
-        lb = Gtk.Label(label="会话名", xalign=0)
+        lb = Gtk.Label(label=t("dlg_sess_name"), xalign=0)
         grid.attach(lb, 0, 0, 1, 1)
         e_name = Gtk.Entry()
         grid.attach(e_name, 1, 0, 1, 1)
 
-        lb2 = Gtk.Label(label="启动命令(可选)", xalign=0)
+        lb2 = Gtk.Label(label=t("dlg_startup"), xalign=0)
         grid.attach(lb2, 0, 1, 1, 1)
         tv = Gtk.TextView()
         tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
@@ -1250,16 +1650,16 @@ class MainWindow(Gtk.Window):
         sw.add(tv)
         grid.attach(sw, 1, 1, 1, 1)
 
-        lb3 = Gtk.Label(label="模板", xalign=0)
+        lb3 = Gtk.Label(label=t("dlg_template"), xalign=0)
         grid.attach(lb3, 0, 2, 1, 1)
         combo = Gtk.ComboBoxText()
-        combo.append("", "（不使用模板）")
-        for t in srv.get("templates", []):
-            combo.append(t["name"], "%s: %s" % (t["name"], t["startup"].splitlines()[0][:40]))
+        combo.append("", t("dlg_no_tpl"))
+        for tt in srv.get("templates", []):
+            combo.append(tt["name"], t("dlg_tpl_label", tt["name"], tt["startup"].splitlines()[0][:40]))
         combo.set_active(0)
         grid.attach(combo, 1, 2, 1, 1)
 
-        cb_save = Gtk.CheckButton(label="同时存为模板，下次直接选")
+        cb_save = Gtk.CheckButton(label=t("dlg_save_tpl"))
         cb_save.set_margin_top(4)
         grid.attach(cb_save, 1, 3, 1, 1)
 
@@ -1271,23 +1671,23 @@ class MainWindow(Gtk.Window):
         d.destroy()
         if resp != Gtk.ResponseType.OK or not name:
             return
-        if not startup.strip() and tpl_name and tpl_name != "（不使用模板）":
-            for t in srv.get("templates", []):
-                if tpl_name.startswith(t["name"] + ":"):
-                    startup = t["startup"]
+        if not startup.strip() and tpl_name and tpl_name != t("dlg_no_tpl"):
+            for tt in srv.get("templates", []):
+                if tpl_name.startswith(tt["name"] + ":"):
+                    startup = tt["startup"]
                     break
         if cb_save.get_active() and startup.strip():
             tpls = srv.setdefault("templates", [])
-            tpls = [t for t in tpls if t["name"] != name]
+            tpls = [tt for tt in tpls if tt["name"] != name]
             tpls.append({"name": name, "startup": startup})
             srv["templates"] = tpls
             save_config(self.cfg)
         argv = launch_terminal(attach_shell_string(srv, name, startup), "%s@%s" % (name, srv["host"]),
                                tab=self._tab_mode())
         if argv is None:
-            self.status.set_text("⚠ 未找到终端模拟器")
+            self.status.set_text(t("no_terminal_short"))
         else:
-            self.status.set_text("🔌 正在创建并连接 tmux 会话「%s」..." % name)
+            self.status.set_text(t("create_and_conn", name))
         self._scan(srv)
 
     # ---------- 杂项 ----------
@@ -1302,22 +1702,22 @@ class MainWindow(Gtk.Window):
         """弹窗输入命令，在选中服务器上开 VTE 终端 tab 动态执行。
         服务器右键菜单触发时 sel_srv 已是右键点选的那台。"""
         if not HAVE_VTE:
-            self.status.set_text("⚠ 缺少 VTE 终端库，无法打开命令终端 (需安装 gir1.2-vte-2.91)")
+            self.status.set_text(t("missing_vte"))
             return
         if not self.cfg["servers"]:
-            self.status.set_text("⚠ 请先添加服务器")
+            self.status.set_text(t("no_server"))
             return
-        d = Gtk.Dialog(title="执行命令 — 打开动态输出 tab", transient_for=self, modal=True)
-        d.add_buttons("取消", Gtk.ResponseType.CANCEL, "打开", Gtk.ResponseType.OK)
+        d = Gtk.Dialog(title=t("dlg_exec_cmd"), transient_for=self, modal=True)
+        d.add_buttons(t("dlg_cancel"), Gtk.ResponseType.CANCEL, t("dlg_open"), Gtk.ResponseType.OK)
         grid = Gtk.Grid(column_spacing=8, row_spacing=6, margin=14)
         d.get_content_area().add(grid)
 
-        lb0 = Gtk.Label(label="目标服务器", xalign=0)
+        lb0 = Gtk.Label(label=t("dlg_target"), xalign=0)
         grid.attach(lb0, 0, 0, 1, 1)
         cb_srv = Gtk.ComboBoxText()
         for s in self.cfg["servers"]:
-            via = (" via %s" % s["jump"]) if s.get("jump") else ""
-            cb_srv.append(s["name"], "%s  (%s%s)" % (s["name"], s["host"], via))
+            via = (t("via_suffix", s["jump"]) if s.get("jump") else "")
+            cb_srv.append(s["name"], t("dlg_srv_with_via", s["name"], s["host"], via))
         grid.attach(cb_srv, 1, 0, 2, 1)
         if self.sel_srv:
             for i, s in enumerate(self.cfg["servers"]):
@@ -1325,14 +1725,14 @@ class MainWindow(Gtk.Window):
                     cb_srv.set_active(i)
                     break
 
-        lb1 = Gtk.Label(label="命令(远端执行, q / Ctrl+C 停止)", xalign=0)
+        lb1 = Gtk.Label(label=t("dlg_cmd"), xalign=0)
         grid.attach(lb1, 0, 1, 1, 1)
         e_cmd = Gtk.Entry()
         e_cmd.set_text("top")
-        e_cmd.set_placeholder_text("top / htop / tail -f /var/log/syslog / df -h ...")
+        e_cmd.set_placeholder_text(t("dlg_cmd_ph"))
         grid.attach(e_cmd, 1, 1, 2, 1)
 
-        cb_login = Gtk.CheckButton(label="完整 shell 运行 (bash -lic，source ~/.profile + ~/.bashrc，自定义命令/PATH export 需要)")
+        cb_login = Gtk.CheckButton(label=t("dlg_full_shell"))
         cb_login.set_active(True)
         grid.attach(cb_login, 1, 2, 2, 1)
 
@@ -1362,7 +1762,7 @@ class MainWindow(Gtk.Window):
         tlb.set_size_request(100, -1)
         tclose = Gtk.Button(label="✕")
         tclose.set_relief(Gtk.ReliefStyle.NONE)
-        tclose.set_tooltip_text("关闭 (终止命令)")
+        tclose.set_tooltip_text(t("term_close_tip"))
         tclose.connect("clicked", lambda *a: self.close_term_tab(term))
         tbox.pack_start(tlb, True, True, 0)
         tbox.pack_end(tclose, False, False, 0)
@@ -1373,7 +1773,7 @@ class MainWindow(Gtk.Window):
         term.connect("child-exited", self.on_term_exited, tlb)
         term.show()
         self.nb.set_current_page(self.nb.page_num(term))
-        self.status.set_text("📟 已在 %s (%s) 上启动: %s" % (srv["name"], srv["host"], cmd))
+        self.status.set_text(t("term_started", srv["name"], srv["host"], cmd))
         term.spawn_async(Vte.PtyFlags.DEFAULT,
                          os.path.expanduser("~"),
                          argv, envv,
@@ -1383,12 +1783,12 @@ class MainWindow(Gtk.Window):
 
     def on_term_spawned(self, term, pid, error, *a):
         if error is not None:
-            self._feed(term, "\r\n⚠ 启动失败: %s\r\n" % error.message)
+            self._feed(term, t("term_spawn_fail", error.message))
 
     def on_term_exited(self, term, status, tlb):
         code = (status >> 8) & 0xff
-        tlb.set_text(tlb.get_text() + "  ✓ 已结束")
-        self._feed(term, "\r\n\x1b[90m[命令已结束, exit=%d] 关 tab 或点 ➕ 新命令重开\x1b[0m\r\n" % code)
+        tlb.set_text(tlb.get_text() + t("term_done_suffix"))
+        self._feed(term, t("term_exit_msg", code))
 
     def close_term_tab(self, term):
         page = self.nb.page_num(term)
@@ -1398,21 +1798,22 @@ class MainWindow(Gtk.Window):
 
     def build_menus(self):
         self.srv_menu = Gtk.Menu()
-        for label, cb in (("🔌 打开 SSH", self.on_connect_ssh),
-                          ("📂 SFTP 终端", self.on_sftp_terminal),
-                          ("📁 SFTP 文件管理器", self.on_sftp_fm),
-                          ("📟 执行命令 (动态输出)", self.on_new_term),
-                          ("✏️ 编辑", self.on_edit_server),
-                          ("📋 复制 ssh 命令", self.on_copy_ssh_cmd),
-                          ("🗑 删除", self.on_delete_server)):
+        for label, cb in ((t("menu_open_ssh"), self.on_connect_ssh),
+                          (t("menu_sftp_term"), self.on_sftp_terminal),
+                          (t("menu_sftp_fm"), self.on_sftp_fm),
+                          (t("menu_exec_cmd"), self.on_new_term),
+                          (t("menu_edit"), self.on_edit_server),
+                          (t("menu_copy_ssh"), self.on_copy_ssh_cmd),
+                          (t("menu_delete"), self.on_delete_server)):
             item = Gtk.MenuItem(label=label)
             item.connect("activate", cb)
             self.srv_menu.append(item)
         self.srv_menu.show_all()
 
         self.sess_menu = Gtk.Menu()
-        for label, cb in (("🔌 连接", self._connect_selected), ("📋 复制命令", self.on_copy_sess_cmd),
-                          ("💀 终止会话", self.on_kill_session)):
+        for label, cb in ((t("menu_connect"), self._connect_selected),
+                          (t("menu_copy_cmd"), self.on_copy_sess_cmd),
+                          (t("menu_kill"), self.on_kill_session)):
             item = Gtk.MenuItem(label=label)
             item.connect("activate", cb)
             self.sess_menu.append(item)
