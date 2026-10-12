@@ -20,7 +20,7 @@ terminal tabs, load dashboard, startup templates — all included.
 | 📑 **Tab mode** | Header-bar toggle: on = reuse current terminal window's tab; off = new window each time |
 | ➕ **Create session** | GUI form for new tmux session with optional **startup command** and reusable **templates** |
 | 📊 **Load dashboard** | CPU · Mem · Disk · Load · Net up/down · GPU · ping · uptime — **refreshes every 10 s** |
-| 💻 **Embedded terminal** | Right-side VTE terminal tab — run `top` / `mytop` / `tail -f` without leaving the app, **live + interactive** |
+| 💻 **Embedded terminal** | Right-side VTE terminal tab — run `top` / `btop` / `mytop` / `tail -f` without leaving the app, **live + interactive**, with one-click command presets |
 | 📁 **SFTP** | Open Nautilus or your file manager at the server root, or hand off a `sftp://` URL |
 | 📋 **Copy command** | One-click copy of attach / ssh command to clipboard; paste anywhere |
 | 🪓 **Kill session** | Right-click any session → `tmux kill-session` (single or all) |
@@ -60,6 +60,12 @@ Or simply:
 python3 tmux_launcher.py
 ```
 
+**Tests** (offline — no network, no touching your config):
+
+```bash
+python3 tests/test_cmd_build.py     # command building / parsers / i18n parity
+```
+
 **Desktop entry**
 
 ```bash
@@ -94,7 +100,7 @@ Search for **Tmux Launcher** in GNOME Activities afterwards.
 | --- | --- |
 | Connect to an existing session | Double-click the session card on the right |
 | Create a new session | **➕ New tmux session** on the right; fill name + startup command; save as template |
-| Run an ad-hoc command | **📟 Run command** in the header, or right-click server → "Run command" → dialog → runs in right-side terminal tab |
+| Run an ad-hoc command | **📟 Run command** in the header, or right-click server → "Run command" → pick a `top` / `btop` / `mytop` preset (or type your own) → runs in the right-side terminal tab |
 | Open SFTP | Right-click server → "SFTP" |
 | Copy ssh command | Right-click session → "Copy connect command" |
 | Kill a session | Right-click session → "Delete session" |
@@ -147,7 +153,7 @@ Search for **Tmux Launcher** in GNOME Activities afterwards.
 
 - **Zero server-side**: pure client. Only uses `ssh` and tmux's built-in commands (attach / new-session / kill-session). No agent installed on remote hosts.
 - **Probe and connect are decoupled**: probing uses `BatchMode=yes` + `-T` for silent, time-bounded scans; connecting goes through your terminal. Even if probing fails on auth, you can still right-click the server → "New session" or "SFTP".
-- **askpass exact host match**: `SSH_ASKPASS=askpass.py` matches ssh's prompt (`user@host's password:`) exactly. Each hop in a multi-hop chain uses its own password (v3 fixed a bug where the target hop would get the wrong password when two hops used different ones).
+- **askpass exact host match**: `SSH_ASKPASS=askpass.py` matches ssh's prompt (`user@host's password:`) exactly. Each hop in a multi-hop chain uses its own password (v3 fixed a bug where the target hop would get the wrong password when two hops used different ones). v4: if the prompt names a host that isn't in your config, askpass **refuses** instead of replaying the first password in the list — only prompts with no host at all fall back to `TL_TARGETS`.
 - **Embedded vs external terminal**: the embedded tab uses VTE (`ssh -tt`) and is great for live output; for real work you'll still prefer the external tab (when Tab Mode is on) — full keybindings, theming, copy/paste.
 - **Minimal i18n scaffolding**: a built-in `LANGS` dict + `t()` function with English-only strings. Change `LANG = "en"` at the top of `tmux_launcher.py` to `"zh"` to switch instantly without any restart.
 
@@ -169,6 +175,10 @@ Search for **Tmux Launcher** in GNOME Activities afterwards.
 
 ### 🗺 Version history
 
+- **v8.4.2** — Fixes: "New tmux session" now honours the gateway + saved password (it silently dropped both); killing a session no longer freezes the window (ssh runs in the background); right-click menus no longer misbehave on Wayland. askpass v4 refuses unknown hosts instead of replaying a stored password. Servers without tmux are reported correctly again. Adds `top` / `btop` / `mytop` presets to the Run command dialog, plus an offline regression suite (`tests/`)
+- **v8.4** — UI locked to English; README unified
+- **v8.3** — Built-in GUI bilingual toggle (later removed in v8.4)
+- **v8.1** — README + `run.sh` launcher
 - **v8** — Right-side tabbed embedded terminal (VTE, full-height); run arbitrary commands live & interactively
 - **v7** — tmux tab title changed to `session@host`
 - **v6** — Removed hardcoded default server; tab mode for gnome-terminal; new `.desktop` file

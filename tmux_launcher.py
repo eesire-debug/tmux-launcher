@@ -34,6 +34,7 @@ CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "tmux-launcher")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sessions.json")
 AUTO_RESCAN_MS = 30000
 LOAD_REFRESH_MS = 10_000   # 负荷刷新周期
+CMD_PRESETS = ("top", "btop", "mytop")   # 执行命令对话框的快捷按钮（点击填入命令框）
 
 CSS = b"""
 .dot-ok     { color: #2ecc71; }
@@ -75,8 +76,6 @@ LANGS = {
         # ---- 主窗口 / 顶栏 ----
         "win_title":         "🔗 Tmux 连接器",
         "subtitle":          "%d 台服务器 · 自动探测 tmux",
-        "lang_toggle_tip":   "切换界面语言",
-        "lang_target":       "English",
         "add_server":        "➕ 添加服务器",
         "tab_mode":          "📑 标签页模式",
         "tab_mode_tip":      "连接时在现有 ptyxis 窗口开新标签页；关闭则每次开新窗口",
@@ -140,6 +139,7 @@ LANGS = {
         "copied_connect":    "📋 已复制: %s",
         "copied_ssh":        "📋 已复制 ssh 登录命令",
         "killed":            "💀 已终止会话 %s",
+        "killing":           "⏳ 正在终止会话 %s ...",
         "kill_fail":         "⚠ 终止失败: %s",
         "kill_confirm":      "终止 tmux 会话「%s」?",
         "kill_confirm_sub":  "执行 tmux kill-session -t %s，会话内所有进程都会被结束",
@@ -192,6 +192,8 @@ LANGS = {
         "via_suffix":        " via %s",
         "dlg_cmd":           "命令(远端执行, q / Ctrl+C 停止)",
         "dlg_cmd_ph":        "top / htop / tail -f /var/log/syslog / df -h ...",
+        "dlg_cmd_preset":    "快捷命令",
+        "cmd_preset_tip":    "点击填入命令: %s",
         "dlg_full_shell":    "完整 shell 运行 (bash -lic，source ~/.profile + ~/.bashrc，自定义命令/PATH export 需要)",
         "missing_vte":       "⚠ 缺少 VTE 终端库，无法打开命令终端 (需安装 gir1.2-vte-2.91)",
         "no_server":         "⚠ 请先添加服务器",
@@ -237,8 +239,6 @@ LANGS = {
     "en": {
         "win_title":         "🔗 Tmux Launcher",
         "subtitle":          "%d servers · auto-detect tmux",
-        "lang_toggle_tip":   "Switch language",
-        "lang_target":       "中文",
         "add_server":        "➕ Add server",
         "tab_mode":          "📑 Tab mode",
         "tab_mode_tip":      "Reuse the existing ptyxis window as a new tab; off opens a new window each time",
@@ -295,6 +295,7 @@ LANGS = {
         "copied_connect":    "📋 Copied: %s",
         "copied_ssh":        "📋 Copied ssh login command",
         "killed":            "💀 Killed session %s",
+        "killing":           "⏳ Killing session %s ...",
         "kill_fail":         "⚠ Kill failed: %s",
         "kill_confirm":      "Kill tmux session “%s”?",
         "kill_confirm_sub":  "Run tmux kill-session -t %s — all processes inside the session will end.",
@@ -342,6 +343,8 @@ LANGS = {
         "via_suffix":        " via %s",
         "dlg_cmd":           "Command (runs on remote, q / Ctrl+C to stop)",
         "dlg_cmd_ph":        "top / htop / tail -f /var/log/syslog / df -h ...",
+        "dlg_cmd_preset":    "Presets",
+        "cmd_preset_tip":    "Click to fill in: %s",
         "dlg_full_shell":    "Run in full login shell (bash -lic: sources ~/.profile + ~/.bashrc; needed for custom commands / PATH exports)",
         "missing_vte":       "⚠ VTE terminal library missing — cannot open command terminal (install gir1.2-vte-2.91)",
         "no_server":         "⚠ Add a server first",
@@ -444,13 +447,15 @@ def save_config(cfg):
     ensure_askpass()
 
 
-ASKPASS_VERSION = "v3"
+ASKPASS_VERSION = "v4"
 
 
 def ensure_askpass():
     """生成 SSH_ASKPASS 辅助脚本：优先用 ssh 密码提示文本里的 user@host 匹配配置里的密码
     （多跳 -J 下每跳提示的主机不同，必须按提示取，否则两跳密码不同时目标跳会拿到跳板密码）；
-    提示解析不出时才回退 TL_TARGETS(多目标空格分隔)。
+    提示里解析不出主机时才回退 TL_TARGETS(多目标空格分隔)。
+    v4: 提示里解析出了主机但配置里没有 → 直接拒绝，绝不回吐别的服务器的密码
+    （v3 无条件回退 TL_TARGETS，未知主机的提示会拿到列表里第一个密码）。
     密码不进命令行/环境；文件带版本标记，升级时自动重写。"""
     os.makedirs(CONFIG_DIR, exist_ok=True)
     content = '''#!/usr/bin/env python3
@@ -463,14 +468,18 @@ try:
 except Exception:
     sys.exit(1)
 prompt = sys.argv[1] if len(sys.argv) > 1 else ""
-# 提示里解析出的主机排最前(最精确)，静态 TL_TARGETS 只作回退
+# 提示里解析出的主机排最前(最精确)；只有像主机的串(含 @ 或 .)才可信，
+# "Password:" 这类没主机的提示才回退 TL_TARGETS。
 cands = []
 m = re.search(r"([\\w.-]+@)?([\\w.-]+)(?::\\d+)?", prompt)
 if m:
-    cands.append((m.group(1) or "") + m.group(2))
-    if m.group(2):
-        cands.append(m.group(2))
-cands += os.environ.get("TL_TARGETS", "").split()
+    full = (m.group(1) or "") + m.group(2)
+    if "@" in full or "." in full:
+        cands.append(full)
+        if m.group(2):
+            cands.append(m.group(2))
+if not cands:
+    cands = [c for c in os.environ.get("TL_TARGETS", "").split() if c]
 def match(t):
     for s in cfg.get("servers", []):
         full = ("%%s@%%s" %% (s["user"], s["host"])) if s.get("user") else s["host"]
@@ -478,13 +487,11 @@ def match(t):
             return s["password"]
     return None
 for t in cands:
-    if not t:
-        continue
     pw = match(t)
     if pw:
         sys.stdout.write(pw)
         sys.exit(0)
-sys.exit(1)
+sys.exit(1)   # 认不出的主机一律不给密码，宁可让 ssh 失败
 ''' % ASKPASS_VERSION
     if os.path.exists(ASKPASS):
         with open(ASKPASS, encoding="utf-8") as f:
@@ -892,7 +899,7 @@ def parse_tmux_ls(r):
     if "RC=0" in r.stdout:
         sessions.sort(key=lambda x: -x["created"])
         return "ok", sessions, ""
-    if "not found" in r.stderr.lower():
+    if "NOTMUX" in r.stdout or "not found" in r.stderr.lower():
         return "notmux", [], t("msg_no_tmux")
     return "empty", [], t("msg_empty")
 
@@ -901,8 +908,11 @@ def scan_server(srv, seq, done, cfg=None):
     """后台探测服务器上的 tmux 实例: tmux ls。结果回调 GLib.idle_add(done, result)。
     cfg 提供时支持 -J 跳板。"""
     def run():
-        remote = ("tmux ls -F '#{session_name}|#{session_windows}|#{session_created}' "
-                  "2>/dev/null; echo RC=$?")
+        # 先 command -v 判定 tmux 是否存在：直接跑 tmux 的话 "command not found" 会被
+        # 2>/dev/null 吞掉，没装 tmux 的机器会被误报成"已装但无会话"（notmux 分支形同虚设）。
+        remote = ("if command -v tmux >/dev/null 2>&1; then "
+                  "tmux ls -F '#{session_name}|#{session_windows}|#{session_created}' "
+                  "2>/dev/null; echo RC=$?; else echo NOTMUX; fi")
         try:
             r = run_ssh_quiet(srv, remote, cfg)
         except Exception:
@@ -942,6 +952,9 @@ class MainWindow(Gtk.Window):
 
     def __init__(self):
         self.cfg = load_config()
+        # 启动即升级 askpass 脚本：v3 及更早版本对未知主机会回吐列表里第一个密码，
+        # 只在保存服务器时重写的话，老用户不改配置就一直用着旧脚本。
+        ensure_askpass()
         super().__init__(title=t("win_title"))
         self.set_default_size(900, 560)
         # WM_CLASS 必须与 .desktop 的 StartupWMClass 一致，GNOME dock 才显示正确图标
@@ -1251,8 +1264,16 @@ class MainWindow(Gtk.Window):
             row = self.srv_list.get_row_at_y(int(event.y))
             if row is not None:
                 self.srv_list.select_row(row)
-                self.srv_menu.popup(None, None, None, None, event.button, event.time)
+                self._popup_menu(self.srv_menu, event)
         return False
+
+    def _popup_menu(self, menu, event):
+        """Wayland 下菜单必须知道自己挂在哪个窗口，否则报 transient_for 断言且无法定位。
+        GTK ≥3.22 的 popup_at_pointer 会按事件设置父窗口；旧版本回退 popup。"""
+        try:
+            menu.popup_at_pointer(event)
+        except AttributeError:
+            menu.popup(None, None, None, None, event.button, event.time)
 
     # ---------- 探测 ----------
 
@@ -1337,7 +1358,7 @@ class MainWindow(Gtk.Window):
             parent = box.get_parent()
             if parent is not None:
                 self.sess_flow.select_child(parent)
-            self.sess_menu.popup(None, None, None, None, event.button, event.time)
+            self._popup_menu(self.sess_menu, event)
             return True
         return False
 
@@ -1422,15 +1443,28 @@ class MainWindow(Gtk.Window):
         md.destroy()
         if resp != Gtk.ResponseType.YES:
             return
-        try:
-            r = run_ssh_quiet(srv, "tmux kill-session -t %s" % shlex.quote(sess["name"]), self.cfg)
-            if r.returncode == 0:
-                self.status.set_text(t("killed", sess["name"]))
-            else:
-                self.status.set_text(t("kill_fail", r.stderr.strip()[:80]))
-        except Exception as e:
-            self.status.set_text(t("kill_fail", e))
-        self._scan(srv)
+        sess_name, srv_name = sess["name"], srv["name"]
+        self.status.set_text(t("killing", sess_name))
+
+        def run():
+            """kill 走后台线程：ssh 最坏要等 15s 超时，放主线程会冻住整个窗口。"""
+            try:
+                r = run_ssh_quiet(srv, "tmux kill-session -t %s" % shlex.quote(sess_name), self.cfg)
+                msg = (t("killed", sess_name) if r.returncode == 0
+                       else t("kill_fail", r.stderr.strip()[:80]))
+            except Exception as e:
+                msg = t("kill_fail", e)
+            GLib.idle_add(self._after_kill, srv_name, msg)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _after_kill(self, srv_name, msg):
+        """kill 结果回主线程：更新状态栏，仍选中同一台服务器才重新探测。"""
+        self.status.set_text(msg)
+        srv = self.srv_by_name(srv_name)
+        if srv and srv_name == self.sel_srv:
+            self._scan(srv)
+        return False
 
     def _selected_sess(self):
         sel = self.sess_flow.get_selected_children()
@@ -1627,7 +1661,8 @@ class MainWindow(Gtk.Window):
             tpls.append({"name": name, "startup": startup})
             srv["templates"] = tpls
             save_config(self.cfg)
-        argv = launch_terminal(attach_shell_string(srv, name, startup), "%s@%s" % (name, srv["host"]),
+        argv = launch_terminal(attach_shell_string(srv, name, startup, cfg=self.cfg),
+                               "%s@%s" % (name, srv["host"]),
                                tab=self._tab_mode())
         if argv is None:
             self.status.set_text(t("no_terminal_short"))
@@ -1677,9 +1712,20 @@ class MainWindow(Gtk.Window):
         e_cmd.set_placeholder_text(t("dlg_cmd_ph"))
         grid.attach(e_cmd, 1, 1, 2, 1)
 
+        # 快捷命令: 点一下填进命令框，仍可手工改；远端没装该命令时终端里会直接报 command not found
+        lb_p = Gtk.Label(label=t("dlg_cmd_preset"), xalign=0)
+        grid.attach(lb_p, 0, 2, 1, 1)
+        presets = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        for cmd in CMD_PRESETS:
+            b = Gtk.Button(label=cmd)
+            b.set_tooltip_text(t("cmd_preset_tip", cmd))
+            b.connect("clicked", lambda _b, c=cmd: e_cmd.set_text(c))
+            presets.pack_start(b, False, False, 0)
+        grid.attach(presets, 1, 2, 2, 1)
+
         cb_login = Gtk.CheckButton(label=t("dlg_full_shell"))
         cb_login.set_active(True)
-        grid.attach(cb_login, 1, 2, 2, 1)
+        grid.attach(cb_login, 1, 3, 2, 1)
 
         d.show_all()
         resp = d.run()
@@ -1754,6 +1800,8 @@ class MainWindow(Gtk.Window):
             item.connect("activate", cb)
             self.srv_menu.append(item)
         self.srv_menu.show_all()
+        # 挂到列表控件上：Wayland 下 popup 才拿得到父窗口（否则 transient_for 断言 + 无法定位）
+        self.srv_menu.attach_to_widget(self.srv_list, None)
 
         self.sess_menu = Gtk.Menu()
         for label, cb in ((t("menu_connect"), self._connect_selected),
@@ -1763,6 +1811,7 @@ class MainWindow(Gtk.Window):
             item.connect("activate", cb)
             self.sess_menu.append(item)
         self.sess_menu.show_all()
+        self.sess_menu.attach_to_widget(self.sess_flow, None)
 
     def _connect_selected(self, *a):
         sess = self._selected_sess()
